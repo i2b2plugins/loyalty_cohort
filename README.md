@@ -1,5 +1,4 @@
-# Implements the loyalty cohort algorithm defined in 
-# *External Validation of an Algorithm to Identify Patients with High Data-Completeness in Electronic Health Records for Comparative Effectiveness Research* by Lin et al.
+# Implements the loyalty cohort algorithm defined in *External Validation of an Algorithm to Identify Patients with High Data-Completeness in Electronic Health Records for Comparative Effectiveness Research* by Lin et al.
 
 ## Steps to run:
 

@@ -1,4 +1,10 @@
-# Implements the loyalty cohort algorithm defined in *External Validation of an Algorithm to Identify Patients with High Data-Completeness in Electronic Health Records for Comparative Effectiveness Research* by Lin et al.
+# Loyalty Cohort Algorithm
+### Implements the loyalty cohort algorithm defined in *External Validation of an Algorithm to Identify Patients with High Data-Completeness in Electronic Health Records for Comparative Effectiveness Research* by Lin et al.
+
+## Notes:
+* This only runs on MSSQL right now
+* The Loyalty Paths are missing some sibling nodes.
+* Relies on i2b2 data using the ACT ontology.
 
 ## Steps to run:
 

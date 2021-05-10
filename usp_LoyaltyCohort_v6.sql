@@ -448,15 +448,28 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
 			+ cast(PneumococcalVaccine as int) + cast(A1C as int) + cast(BMI as int) ) >=2 THEN 1 ELSE 0 END
 		
 	--------Perform predictive score
-		
-		  Update #cohort 
-		  set Predicted_score = -0.010 + (0.049* cast(MDVisit_pname2 as INT)) + (0.087* cast(MDVisit_pname3 as INT)) + (0.078* cast(MedicalExam as INT)) + 
-							(0.075*cast(Mammography as INT)) + (0.009*cast(PapTest as INT)) + (0.103* cast(PSATest as INT)) + (0.064* cast(Colonoscopy as INT)) + 
-							(0.034* cast(FecalOccultTest as INT)) + (0.102* cast(FluShot as INT)) + (0.031* cast(PneumococcalVaccine as INT)) +  
-							(0.017* cast(BMI as INT)) + (0.018* cast(A1C as INT)) + (0.002* cast(meduse1 as INT)) + (0.074* cast(meduse2 as INT)) + 
-							(0.091* cast(INP1_OPT1_Visit as INT)) + (0.050* cast(OPT2_Visit as INT)) - (0.026* cast(Num_Dx1 as INT)) + (0.037* cast(NUM_DX2 as INT)) +
-							(0.078* cast(ED_Visit as INT)) + (0.049*cast(Routine_Care_2 as INT)) 
-	
+
+
+UPDATE #cohort
+SET Predicted_score = PC.Predicated_score
+FROM #cohort C,
+(
+SELECT PATIENT_NUM, -0.010+SUM(CE.COEFF*CAST(VALUE AS INT)) AS Predicted_score
+FROM (
+select patient_num, MDVisit_pname2, MDVisit_pname3, MedicalExam, Mammography, PapTest, PSATest, Colonoscopy, FecalOccultTest, FluShot, PneumococcalVaccine
+  , BMI, A1C, meduse1, meduse2, INP1_OPT1_Visit, OPT2_Visit, Num_Dx1, Num_Dx2, ED_Visit, Routine_Care_2
+from #cohort
+)U
+unpivot /* ORACLE EQUIV : https://www.oracletutorial.com/oracle-basics/oracle-unpivot/ */
+(value for field_name in (MDVisit_pname2, MDVisit_pname3, MedicalExam, Mammography, PapTest, PSATest, Colonoscopy, FecalOccultTest, FluShot, PneumococcalVaccine
+  , BMI, A1C, meduse1, meduse2, INP1_OPT1_Visit, OPT2_Visit, Num_Dx1, Num_Dx2, ED_Visit, Routine_Care_2))p
+  JOIN XREF_LoyaltyCode_PSCoeff CE
+    ON P.FIELD_NAME = CE.FIELD_NAME
+GROUP BY PATIENT_NUM
+)PC
+WHERE PC.PATIENT_NUM = C.PATIENT_NUM;
+
+
 
 	--perform cleanup
 	drop table #visit_ED

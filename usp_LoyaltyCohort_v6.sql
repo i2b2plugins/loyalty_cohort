@@ -451,23 +451,25 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
 
 
 UPDATE #cohort
-SET Predicted_score = PC.Predicated_score
+SET Predicted_score = PS.Predicted_score
 FROM #cohort C,
 (
-SELECT PATIENT_NUM, -0.010+SUM(CE.COEFF*CAST(VALUE AS INT)) AS Predicted_score
+SELECT PATIENT_NUM, -0.010+(p.MDVisit_pname2*CAST(c.MDVisit_pname2 AS INT))+(p.MDVisit_pname3*CAST(c.MDVisit_pname3 AS INT))+(p.MedicalExam*CAST(C.MedicalExam AS INT))
+  +(p.Mammography*CAST(c.Mammography AS INT))+(p.PapTest*CAST(c.PapTest as INT))+(p.PSATest*CAST(c.PSATest AS INT))+(p.Colonoscopy*CAST(c.Colonoscopy AS INT))
+  +(p.FecalOccultTest*CAST(c.FecalOccultTest AS INT))+(p.FluShot*CAST(c.FluShot AS INT))+(p.PneumococcalVaccine*CAST(c.PneumococcalVaccine AS INT))
+  +(p.BMI*CAST(c.BMI AS INT))+(p.A1C*CAST(c.A1C as INT))+(p.MedUse1*CAST(c.MedUse1 AS INT))+(p.MedUse2*CAST(c.MedUse2 AS INT))+(p.INP1_OPT1_Visit*CAST(c.INP1_OPT1_Visit AS INT))
+  +(p.OPT2_Visit*CAST(c.OPT2_Visit AS INT))+(p.INP1_OPT1_Visit*CAST(c.INP1_OPT1_Visit AS INT))+(p.ED_Visit*CAST(c.ED_Visit AS INT))+(p.Num_Dx1*CAST(c.Num_Dx1 AS INT))
+  +(p.Num_Dx2*CAST(c.Num_Dx2 AS INT))+(p.Routine_Care_2*CAST(c.Routine_Care_2 AS INT))
+  AS Predicted_score
 FROM (
-select patient_num, MDVisit_pname2, MDVisit_pname3, MedicalExam, Mammography, PapTest, PSATest, Colonoscopy, FecalOccultTest, FluShot, PneumococcalVaccine
-  , BMI, A1C, meduse1, meduse2, INP1_OPT1_Visit, OPT2_Visit, Num_Dx1, Num_Dx2, ED_Visit, Routine_Care_2
-from #cohort
+select FIELD_NAME, COEFF
+from XREF_LoyaltyCode_PSCoeff
 )U
-unpivot /* ORACLE EQUIV : https://www.oracletutorial.com/oracle-basics/oracle-unpivot/ */
-(value for field_name in (MDVisit_pname2, MDVisit_pname3, MedicalExam, Mammography, PapTest, PSATest, Colonoscopy, FecalOccultTest, FluShot, PneumococcalVaccine
-  , BMI, A1C, meduse1, meduse2, INP1_OPT1_Visit, OPT2_Visit, Num_Dx1, Num_Dx2, ED_Visit, Routine_Care_2))p
-  JOIN XREF_LoyaltyCode_PSCoeff CE
-    ON P.FIELD_NAME = CE.FIELD_NAME
-GROUP BY PATIENT_NUM
-)PC
-WHERE PC.PATIENT_NUM = C.PATIENT_NUM;
+PIVOT /* ORACLE EQUIV : https://www.oracletutorial.com/oracle-basics/oracle-unpivot/ */
+(MAX(COEFF) for FIELD_NAME in (MDVisit_pname2, MDVisit_pname3, MedicalExam, Mammography, PapTest, PSATest, Colonoscopy, FecalOccultTest, FluShot, PneumococcalVaccine
+  , BMI, A1C, MedUse1, MedUse2, INP1_OPT1_Visit, OPT2_Visit, Num_Dx1, Num_Dx2, ED_Visit, Routine_Care_2))p, #COHORT c
+)PS
+WHERE C.PATIENT_NUM = PS.PATIENT_NUM;
 
 
 

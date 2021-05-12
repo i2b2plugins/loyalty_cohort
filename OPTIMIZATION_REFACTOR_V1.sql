@@ -88,7 +88,7 @@ WHERE P.BIRTH_DATE IS NOT NULL /* ENSURE BIRTH_DATE IS NOT NULL FOR SUMMARY TABL
 GROUP BY V.PATIENT_NUM, datediff(YEAR,BIRTH_DATE,@indexDate)
 
 SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
-RAISERROR(N'Cohort and Visit Type variables - Rows: %d - Total Execution (ms): %d - Step Runtime (ms): %d', 1, 1, @@rowcount, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
+RAISERROR(N'Cohort and Visit Type variables - Rows: %d - Total Execution (ms): %d - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
 
 /* COHORT FLAGS SANS Num_Dx and MedUse */
 SET @STEPTTS = GETDATE()
@@ -160,7 +160,7 @@ FROM #COHORT C,
 WHERE C.PATIENT_NUM = CF.PATIENT_NUM;
 
 SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
-RAISERROR(N'Cohort Flags (first pass) - Rows: %d - Total Execution (ms): %d  - Step Runtime (ms): %d', 1, 1, @@rowcount, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
+RAISERROR(N'Cohort Flags (first pass) - Rows: %d - Total Execution (ms): %d  - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
 
 /* Num_Dx1, Num_Dx2, MedUse1, MedUse2 */
 SET @STEPTTS = GETDATE()
@@ -228,7 +228,7 @@ FROM #cohort C, CTE_CNTDSVCDT_VARS CSD
 WHERE C.PATIENT_NUM = CSD.PATIENT_NUM;
 
 SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
-RAISERROR(N'Num_Dx and MedUse flags - Rows: %d - Total Execution (ms): %d - Step Runtime (ms): %d', 1, 1, @@rowcount, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
+RAISERROR(N'Num_Dx and MedUse flags - Rows: %d - Total Execution (ms): %d - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
 
 /* Predicated Score Calculation v2*/
 SET @STEPTTS = GETDATE()
@@ -255,7 +255,7 @@ PIVOT /* ORACLE EQUIV : https://www.oracletutorial.com/oracle-basics/oracle-unpi
 WHERE C.PATIENT_NUM = PS.PATIENT_NUM;
 
 SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
-RAISERROR(N'Predicated Score v2 - Rows: %d - Total Execution (ms): %d  - Step Runtime (ms): %d', 1, 1, @@rowcount, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
+RAISERROR(N'Predicated Score v2 - Rows: %d - Total Execution (ms): %d  - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
 
 /* OPTIONAL CHARLSON COMORBIDITY INDEX -- ADDS APPROX. 1m in UKY environment. 
    REQUIRES SITE TO LOAD LU_CHARLSON FROM REPO 
@@ -339,7 +339,7 @@ RAISERROR(N'Predicated Score v2 - Rows: %d - Total Execution (ms): %d  - Step Ru
 --)ccisum
 
 --SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
---RAISERROR(N'Charlson Index and weighted flags - Rows: %d - Total Execution (ms): %d  - Step Runtime (ms): %d', 1, 1, @@rowcount, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
+--RAISERROR(N'Charlson Index and weighted flags - Rows: %d - Total Execution (ms): %d  - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
 
 --/* CHARLSON 10YR PROB MEDIAN/MEAN/MODE/STDEV */
 --SET @STEPTTS = GETDATE()
@@ -385,7 +385,7 @@ RAISERROR(N'Predicated Score v2 - Rows: %d - Total Execution (ms): %d  - Step Ru
 --GROUP BY MS.AGEGRP, MEDIAN_10YR_SURVIVAL, S.MODE_10YRPROB, S.STDEV_10YRPROB, S.MEAN_10YRPROB
 
 --SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
---RAISERROR(N'Charlson Stats - Rows: %d - Total Execution (ms): %d  - Step Runtime (ms): %d', 1, 1, @@rowcount, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
+--RAISERROR(N'Charlson Stats - Rows: %d - Total Execution (ms): %d  - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
 
 /* FINAL SUMMARIZATION OF RESULTS */
 SET @STEPTTS = GETDATE()
@@ -481,4 +481,4 @@ group by grouping sets ((case when ISNULL(AGE,0)< 65 then 'Under 65'
 
 
 SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
-RAISERROR(N'Final Summary Table - Rows: %d - Total Execution (ms): %d - Step Runtime (ms): %d', 1, 1, @@rowcount, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
+RAISERROR(N'Final Summary Table - Rows: %d - Total Execution (ms): %d - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;

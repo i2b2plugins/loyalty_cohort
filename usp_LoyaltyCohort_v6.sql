@@ -448,15 +448,30 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
 			+ cast(PneumococcalVaccine as int) + cast(A1C as int) + cast(BMI as int) ) >=2 THEN 1 ELSE 0 END
 		
 	--------Perform predictive score
-		
-		  Update #cohort 
-		  set Predicted_score = -0.010 + (0.049* cast(MDVisit_pname2 as INT)) + (0.087* cast(MDVisit_pname3 as INT)) + (0.078* cast(MedicalExam as INT)) + 
-							(0.075*cast(Mammography as INT)) + (0.009*cast(PapTest as INT)) + (0.103* cast(PSATest as INT)) + (0.064* cast(Colonoscopy as INT)) + 
-							(0.034* cast(FecalOccultTest as INT)) + (0.102* cast(FluShot as INT)) + (0.031* cast(PneumococcalVaccine as INT)) +  
-							(0.017* cast(BMI as INT)) + (0.018* cast(A1C as INT)) + (0.002* cast(meduse1 as INT)) + (0.074* cast(meduse2 as INT)) + 
-							(0.091* cast(INP1_OPT1_Visit as INT)) + (0.050* cast(OPT2_Visit as INT)) - (0.026* cast(Num_Dx1 as INT)) + (0.037* cast(NUM_DX2 as INT)) +
-							(0.078* cast(ED_Visit as INT)) + (0.049*cast(Routine_Care_2 as INT)) 
-	
+
+
+UPDATE #cohort
+SET Predicted_score = PS.Predicted_score
+FROM #cohort C,
+(
+SELECT PATIENT_NUM, -0.010+(p.MDVisit_pname2*CAST(c.MDVisit_pname2 AS INT))+(p.MDVisit_pname3*CAST(c.MDVisit_pname3 AS INT))+(p.MedicalExam*CAST(C.MedicalExam AS INT))
+  +(p.Mammography*CAST(c.Mammography AS INT))+(p.PapTest*CAST(c.PapTest as INT))+(p.PSATest*CAST(c.PSATest AS INT))+(p.Colonoscopy*CAST(c.Colonoscopy AS INT))
+  +(p.FecalOccultTest*CAST(c.FecalOccultTest AS INT))+(p.FluShot*CAST(c.FluShot AS INT))+(p.PneumococcalVaccine*CAST(c.PneumococcalVaccine AS INT))
+  +(p.BMI*CAST(c.BMI AS INT))+(p.A1C*CAST(c.A1C as INT))+(p.MedUse1*CAST(c.MedUse1 AS INT))+(p.MedUse2*CAST(c.MedUse2 AS INT))+(p.INP1_OPT1_Visit*CAST(c.INP1_OPT1_Visit AS INT))
+  +(p.OPT2_Visit*CAST(c.OPT2_Visit AS INT))+(p.INP1_OPT1_Visit*CAST(c.INP1_OPT1_Visit AS INT))+(p.ED_Visit*CAST(c.ED_Visit AS INT))+(p.Num_Dx1*CAST(c.Num_Dx1 AS INT))
+  +(p.Num_Dx2*CAST(c.Num_Dx2 AS INT))+(p.Routine_Care_2*CAST(c.Routine_Care_2 AS INT))
+  AS Predicted_score
+FROM (
+select FIELD_NAME, COEFF
+from XREF_LoyaltyCode_PSCoeff
+)U
+PIVOT /* ORACLE EQUIV : https://www.oracletutorial.com/oracle-basics/oracle-unpivot/ */
+(MAX(COEFF) for FIELD_NAME in (MDVisit_pname2, MDVisit_pname3, MedicalExam, Mammography, PapTest, PSATest, Colonoscopy, FecalOccultTest, FluShot, PneumococcalVaccine
+  , BMI, A1C, MedUse1, MedUse2, INP1_OPT1_Visit, OPT2_Visit, Num_Dx1, Num_Dx2, ED_Visit, Routine_Care_2))p, #COHORT c
+)PS
+WHERE C.PATIENT_NUM = PS.PATIENT_NUM;
+
+
 
 	--perform cleanup
 	drop table #visit_ED

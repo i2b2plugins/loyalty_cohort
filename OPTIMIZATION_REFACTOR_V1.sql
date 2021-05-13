@@ -1,7 +1,7 @@
 IF OBJECT_ID(N'DBO.usp_LoyaltyCohort_opt') IS NOT NULL DROP PROCEDURE DBO.usp_LoyaltyCohort_opt
 GO
 
-CREATE PROC DBO.usp_LoyaltyCohort_opt 
+CREATE PROC DBO.usp_LoyaltyCohort_opt
     @indexDate datetime
 AS
 
@@ -18,6 +18,7 @@ SET XACT_ABORT ON
 IF OBJECT_ID(N'tempdb..#cohort', N'U') IS NOT NULL DROP TABLE #cohort;
 IF OBJECT_ID(N'tempdb..#COHORT_CHARLSON', N'U') IS NOT NULL DROP TABLE #COHORT_CHARLSON;
 IF OBJECT_ID(N'tempdb..#CHARLSON_STATS', N'U') IS NOT NULL DROP TABLE #CHARLSON_STATS;
+IF OBJECT_ID(N'DBO.loyalty_dev_summary', N'U') IS NOT NULL DROP TABLE loyalty_dev_summary;
 
 DECLARE @STARTTS DATETIME = GETDATE()
 DECLARE @STEPTTS DATETIME 
@@ -378,6 +379,7 @@ RAISERROR(N'Predicated Score v2 - Rows: %d - Total Execution (ms): %d  - Step Ru
 /* FINAL SUMMARIZATION OF RESULTS */
 SET @STEPTTS = GETDATE()
 
+
 ;WITH CTE_PREDICTIVE AS (
 SELECT AGEGRP, MIN(PREDICTED_SCORE) PredictiveScoreCutoff
 FROM (
@@ -398,6 +400,7 @@ GROUP BY AGEGRP
 SELECT Summary_Description, ISNULL(COHORTAGG.AGEGRP,'All Patients') as tablename, TotalSubjects, Num_DX1, Num_DX2, MedUSe1, MedUse2, Mammography, PapTest, PSATest, Colonoscopy, FecalOccultTest
   , FluShot, PneumococcalVaccine, BMI, A1C, MedicalExam, INP1_OPT1_Visit, OPT2_Visit, ED_Visit, MDVisit_pname2, MDVisit_pname3, Routine_care_2, Subjects_NoCriteria, CP.PredictiveScoreCutoff
   --, CS.MEAN_10YRPROB, CS.MEDIAN_10YR_SURVIVAL, CS.MODE_10YRPROB, CS.STDEV_10YRPROB
+INTO DBO.loyalty_dev_summary
 FROM (
 SELECT
 'Patient Counts' as Summary_Description,
@@ -466,7 +469,7 @@ group by grouping sets ((case when ISNULL(AGE,0)< 65 then 'Under 65'
   --JOIN #CHARLSON_STATS CS
   --  ON ISNULL(COHORTAGG.AGEGRP,'All Patients') = CS.AGEGRP
 
-
-
 SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
 RAISERROR(N'Final Summary Table - Rows: %d - Total Execution (ms): %d - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
+
+SELECT * FROM DBO.loyalty_dev_summary WHERE Summary_Description = 'PercentOfSubjects'

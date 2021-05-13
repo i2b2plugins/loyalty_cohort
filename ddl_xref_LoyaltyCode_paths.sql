@@ -11,7 +11,7 @@ GO
 
 CREATE TABLE [dbo].[xref_LoyaltyCode_paths](
 	[Feature_name] [varchar](50) NULL,
-	[code type] [varchar](50) NULL,
+	[code_type] [varchar](50) NULL,
 	[ACT_PATH] [varchar](500) NULL,
 	[SiteSpecificCode] [varchar](10) NULL,
 	[Comment] [varchar](250) NULL,

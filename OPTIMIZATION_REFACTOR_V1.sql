@@ -1,21 +1,19 @@
---IF OBJECT_ID(N'dbo.usp_LoyaltyCohort_opt') IS NOT NULL DROP PROCEDURE dbo.usp_LoyaltyCohort_opt
---GO
+IF OBJECT_ID(N'DBO.usp_LoyaltyCohort_opt') IS NOT NULL DROP PROCEDURE DBO.usp_LoyaltyCohort_opt
+GO
 
---CREATE PROC [dbo].[usp_LoyaltyCohort_opt] 
---    @indexDate datetime
---AS
+CREATE PROC DBO.usp_LoyaltyCohort_opt 
+    @indexDate datetime
+AS
 
 /* 
-   AT UKY WE MAINTAIN OUR ACT CRC/PM/QT/METADATA TABLES IN AN 'ACT' SCHEMA
-   AT YOUR SITE YOU WILL LIKELY NEED TO FIND-REPLACE [ACT]. IN THE PROCEDURE WITH [DBO].
-   OR WHATEVER SCHEMA YOU ARE USING
+   POSSIBLE EDIT REQUIRED AT PE.1 - PLEASE SEE COMMENT
 */
 
 SET NOCOUNT ON
 SET XACT_ABORT ON
 
 /* UNCOMMENT IF TESTING PROC BODY ALONE */
-DECLARE @indexDate DATE='20210201'
+--DECLARE @indexDate DATE='20210201'
 
 IF OBJECT_ID(N'tempdb..#cohort', N'U') IS NOT NULL DROP TABLE #cohort;
 IF OBJECT_ID(N'tempdb..#COHORT_CHARLSON', N'U') IS NOT NULL DROP TABLE #COHORT_CHARLSON;
@@ -58,10 +56,10 @@ SET @STEPTTS = GETDATE()
 
 ;WITH VISITTYPE AS (
 select distinct feature_name, c_basecode
-    from [ACT].[NCATS_VISIT_DETAILS] N,
+    from NCATS_VISIT_DETAILS N,
     (select distinct feature_name, act_path 
-        from [dbo].[xref_LoyaltyCode_paths]
-        where [code type] = 'visit' and feature_name in ('inpatient encounter','outpatient encounter','ED encounter')
+        from [DBO].[xref_LoyaltyCode_paths]
+        where [code_type] = 'visit' and feature_name in ('inpatient encounter','outpatient encounter','ED encounter')
         and act_path is not null) X
       where X.ACT_PATH like N.C_FULLNAME+'%'
       and C_BASECODE is not null
@@ -72,8 +70,8 @@ SELECT V.PATIENT_NUM
     , CAST(MAX(CASE WHEN VT.feature_name = 'inpatient encounter' THEN 1 ELSE 0 END) AS BIT) | CAST(MAX(CASE WHEN VT.feature_name = 'outpatient encounter' THEN 1 ELSE 0 END) AS BIT) INP1_OPT1_VISIT
     , CASE WHEN COUNT(DISTINCT CASE WHEN VT.feature_name = 'outpatient encounter' THEN CONVERT(DATE,V.START_DATE) ELSE NULL END) >= 2 THEN 1 ELSE 0 END AS OPT2_VISIT
     , MAX(CASE WHEN VT.feature_name = 'ED encounter' THEN 1 ELSE 0 END) ED_VISIT
-FROM [ACT].[VISIT_DIMENSION] V
-  JOIN [ACT].[PATIENT_DIMENSION] P
+FROM VISIT_DIMENSION V
+  JOIN PATIENT_DIMENSION P
     ON V.PATIENT_NUM = P.PATIENT_NUM
   LEFT JOIN VISITTYPE VT
     ON V.INOUT_CD = VT.C_BASECODE 
@@ -94,23 +92,11 @@ RAISERROR(N'Cohort and Visit Type variables - Rows: %d - Total Execution (ms): %
 SET @STEPTTS = GETDATE()
 
 ;WITH CTE_PARAMS AS (
-select distinct Feature_name, concept_cd, 'DX' as CodeType --[ACT_PATH], 
-from [dbo].[xref_LoyaltyCode_paths] L, ACT.concept_dimension c
+select distinct Feature_name, concept_cd, code_type --[ACT_PATH], 
+from DBO.xref_LoyaltyCode_paths L, CONCEPT_DIMENSION c
 where C.CONCEPT_PATH like L.Act_path+'%'  --jgk: must support local children
-AND [code type] = 'DX'
+AND code_type IN ('DX','PX','lab')
 and (act_path <> '**Not Found' and act_path is not null)
-UNION 
-select Distinct Feature_name, concept_cd, 'PX' as CodeType--[ACT_PATH], 
-from [dbo].[xref_LoyaltyCode_paths] L, ACT.concept_dimension c
-where  C.CONCEPT_PATH like L.Act_path+'%' -- jgk
-AND [code type] = 'PX'
-and (act_path <> '**Not Found' and act_path is not null)
-UNION
-select distinct Feature_name, concept_cd, 'Lab' as CodeType --[ACT_PATH], 
-from [dbo].[xref_LoyaltyCode_paths] L, ACT.concept_dimension c
-where  C.CONCEPT_PATH like L.Act_path+'%' -- jgk
-AND [code type] = 'lab'
-and (act_path <> '**Not Found' and act_path is not null) 
 )
 UPDATE #COHORT
 SET MDVisit_pname2       = CF.MDVisit_pname2
@@ -136,8 +122,8 @@ FROM #COHORT C,
     , MAX(PSATest) as PSATest, MAX(A1C) as A1C
     FROM (
       SELECT O.PATIENT_NUM
-      , CASE WHEN COUNT(DISTINCT CASE WHEN P.CodeType = 'PX' AND (O.PROVIDER_ID is not null and O.provider_id <> '' and O.provider_id <> '@') THEN CONVERT(DATE,O.START_DATE) ELSE NULL END)  = 2 THEN 1 ELSE 0 END AS MDVisit_pname2
-      , CASE WHEN COUNT(DISTINCT CASE WHEN P.CodeType = 'PX' AND (O.PROVIDER_ID is not null and O.provider_id <> '' and O.provider_id <> '@') THEN CONVERT(DATE,O.START_DATE) ELSE NULL END)  > 2 THEN 1 ELSE 0 END AS MDVisit_pname3
+      , CASE WHEN COUNT(DISTINCT CASE WHEN P.code_type = 'PX' AND (O.PROVIDER_ID is not null and O.provider_id <> '' and O.provider_id <> '@') THEN CONVERT(DATE,O.START_DATE) ELSE NULL END)  = 2 THEN 1 ELSE 0 END AS MDVisit_pname2
+      , CASE WHEN COUNT(DISTINCT CASE WHEN P.code_type = 'PX' AND (O.PROVIDER_ID is not null and O.provider_id <> '' and O.provider_id <> '@') THEN CONVERT(DATE,O.START_DATE) ELSE NULL END)  > 2 THEN 1 ELSE 0 END AS MDVisit_pname3
       , MAX(CASE WHEN P.Feature_name = 'Mammography' THEN 1 ELSE 0 END) AS Mammography
       , MAX(CASE WHEN P.Feature_name = 'BMI' THEN 1 ELSE 0 END) AS BMI
       , MAX(CASE WHEN P.Feature_name = 'Flu Shot' THEN 1 ELSE 0 END) AS FluShot
@@ -148,7 +134,7 @@ FROM #COHORT C,
       , MAX(CASE WHEN P.Feature_name = 'Colonoscopy' THEN 1 ELSE 0 END) AS Colonoscopy
       , MAX(CASE WHEN P.Feature_name = 'PSA Test' THEN 1 ELSE 0 END) AS PSATest
       , MAX(CASE WHEN P.Feature_name = 'A1C' THEN 1 ELSE 0 END) AS A1C
-      from [ACT].[OBSERVATION_FACT] o, CTE_PARAMS p
+      from OBSERVATION_FACT o, CTE_PARAMS p
       where o.CONCEPT_CD = p.CONCEPT_CD
       AND o.START_DATE >=  dateadd(yy,-1, @indexDate)
       AND o.START_DATE < @indexDate
@@ -167,30 +153,32 @@ SET @STEPTTS = GETDATE()
 
 ;with DxCodes as (
 Select distinct concept_cd
-from [ACT].[ACT_ICD10CM_DX_2018AA] d, concept_dimension c
+from ACT_ICD10CM_DX_2018AA d, concept_dimension c
 where d.C_FULLNAME = C.CONCEPT_PATH
 and (c_basecode is not null and c_basecode <> '')
 UNION
   Select distinct concept_cd 
-from [ACT].[ACT_ICD9CM_DX_2018AA] d, concept_dimension c
+from ACT_ICD9CM_DX_2018AA d, concept_dimension c
 where d.C_FULLNAME = C.CONCEPT_PATH
 and (c_basecode is not null and c_basecode <> '')
   UNION
 Select distinct c.concept_cd
-from [ACT].[i2b2] d, concept_dimension c, xref_LoyaltyCode_paths x 
+/* <PE.1> -- SITE MAY NEED TO EDIT THIS LINE FOR TABLE OBJECT ALIASED d */
+from i2b2 d, CONCEPT_DIMENSION c, xref_LoyaltyCode_paths x 
+/* </PE.1> -- This should be any additional metadata table your site is maintaining that might contain diagnosis codes */
 where d.C_FULLNAME = C.CONCEPT_PATH and-----
     C.Concept_path = x.act_path  ----- > This block of code handles any local dx codes
 and (d.c_basecode is not null and d.c_basecode <> '')-----
 and x.SiteSpecificCode is not null
-and x.[code type] = 'DX'
+and x.[code_type] = 'DX'
 )
 , MedCodes as (
 Select  distinct c_basecode as CONCEPT_CD
-from [ACT].[ACT_MED_VA_V2_092818]
+from ACT_MED_VA_V2_092818
 where c_basecode is not null and c_basecode  <> ''
 UNION
 select  distinct c_basecode  as CONCEPT_CD 
-from [ACT].[ACT_MED_ALPHA_V2_121318]
+from ACT_MED_ALPHA_V2_121318
 where c_basecode is not null and c_basecode <> ''
 )
 , CTE_CATGRY AS (
@@ -211,7 +199,7 @@ WHERE CHARINDEX(':',CONCEPT_CD) > 0
   FROM (
   SELECT O.PATIENT_NUM, P.CATGRY
     , COUNT(DISTINCT CONVERT(DATE,O.START_DATE)) AS CATCNT
-  FROM [ACT].[OBSERVATION_FACT] O, CTE_CATGRY p
+  FROM OBSERVATION_FACT O, CTE_CATGRY p
         where o.CONCEPT_CD = P.CONCEPT_CD
         AND o.START_DATE >=  dateadd(yy,-1, @indexDate)
         AND o.START_DATE < @indexDate
@@ -246,7 +234,7 @@ SELECT PATIENT_NUM, -0.010+(p.MDVisit_pname2*CAST(c.MDVisit_pname2 AS INT))+(p.M
   AS Predicted_score
 FROM (
 select FIELD_NAME, COEFF
-from XREF_LoyaltyCode_PSCoeff
+from xref_LoyaltyCode_PSCoeff
 )U
 PIVOT /* ORACLE EQUIV : https://www.oracletutorial.com/oracle-basics/oracle-unpivot/ */
 (MAX(COEFF) for FIELD_NAME in (MDVisit_pname2, MDVisit_pname3, MedicalExam, Mammography, PapTest, PSATest, Colonoscopy, FecalOccultTest, FluShot, PneumococcalVaccine

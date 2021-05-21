@@ -6,7 +6,7 @@ CREATE PROC DBO.usp_LoyaltyCohort_opt
 AS
 
 /* 
-   POSSIBLE EDIT REQUIRED AT PE.1 - PLEASE SEE COMMENT
+   CHECK ANY CUSTOM LOCAL CODES ADDED TO xref_LoyaltyCode_paths AT <PE.1> - PLEASE SEE COMMENT
 */
 
 SET NOCOUNT ON
@@ -156,22 +156,22 @@ SET @STEPTTS = GETDATE()
 Select distinct concept_cd
 from ACT_ICD10CM_DX_2018AA d, concept_dimension c
 where d.C_FULLNAME = C.CONCEPT_PATH
-and (c_basecode is not null and c_basecode <> '')
+  and (c_basecode is not null and c_basecode <> '')
 UNION
-  Select distinct concept_cd 
+Select distinct concept_cd 
 from ACT_ICD9CM_DX_2018AA d, concept_dimension c
 where d.C_FULLNAME = C.CONCEPT_PATH
-and (c_basecode is not null and c_basecode <> '')
-  UNION
+  and (c_basecode is not null and c_basecode <> '')
+UNION
+/* <PE.1> Check that this subquery returns the concept codes your site added to 
+  xref_LoyaltyCode_paths are returned correctly */
 Select distinct c.concept_cd
-/* <PE.1> -- SITE MAY NEED TO EDIT THIS LINE FOR TABLE OBJECT ALIASED d */
-from i2b2 d, CONCEPT_DIMENSION c, xref_LoyaltyCode_paths x 
-/* </PE.1> -- This should be any additional metadata table your site is maintaining that might contain diagnosis codes */
-where d.C_FULLNAME = C.CONCEPT_PATH and-----
-    C.Concept_path = x.act_path  ----- > This block of code handles any local dx codes
-and (d.c_basecode is not null and d.c_basecode <> '')-----
-and x.SiteSpecificCode is not null
-and x.[code_type] = 'DX'
+from CONCEPT_DIMENSION c, DBO.xref_LoyaltyCode_paths x 
+where c.CONCEPT_PATH LIKE x.ACT_PATH+'%'  ----- > This block of code handles any local dx codes
+  and (NULLIF(c.CONCEPT_CD,'') is not null)
+  and (NULLIF(x.SiteSpecificCode,'') is not null)
+  and x.[code_type] = 'DX'
+/* </PE.1> */
 )
 , MedCodes as (
 Select  distinct c_basecode as CONCEPT_CD
@@ -472,4 +472,4 @@ group by grouping sets ((case when ISNULL(AGE,0)< 65 then 'Under 65'
 SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
 RAISERROR(N'Final Summary Table - Rows: %d - Total Execution (ms): %d - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
 
-SELECT * FROM DBO.loyalty_dev_summary WHERE Summary_Description = 'PercentOfSubjects'
+SELECT * FROM DBO.loyalty_dev_summary WHERE Summary_Description = 'PercentOfSubjects' ORDER BY TABLENAME;

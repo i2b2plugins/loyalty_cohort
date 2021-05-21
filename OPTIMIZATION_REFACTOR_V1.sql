@@ -6,7 +6,7 @@ CREATE PROC DBO.usp_LoyaltyCohort_opt
 AS
 
 /* 
-   CHECK ANY CUSTOM LOCAL CODES ADDED TO xref_LoyaltyCode_paths AT <PE.1> - PLEASE SEE COMMENT
+   CHECK ANY CUSTOM LOCAL CODES ADDED TO xref_LoyaltyCode_paths AT <PE.1> AND <PE.2> - PLEASE SEE COMMENTS
 */
 
 SET NOCOUNT ON
@@ -96,7 +96,7 @@ SET @STEPTTS = GETDATE()
 select distinct Feature_name, concept_cd, code_type --[ACT_PATH], 
 from DBO.xref_LoyaltyCode_paths L, CONCEPT_DIMENSION c
 where C.CONCEPT_PATH like L.Act_path+'%'  --jgk: must support local children
-AND code_type IN ('DX','PX','lab')
+AND code_type IN ('DX','PX','lab','SITE') /* <PE.1> IF YOUR SITE IS MANAGING ANY SITE SPECIFIC CODES FOR THE FOLLOWING DOMAINS SET THEIR CODE_TYPE = 'SITE' IN dbo.xref_LoyaltyCode_paths </PE.1> */
 and (act_path <> '**Not Found' and act_path is not null)
 )
 UPDATE #COHORT
@@ -163,7 +163,7 @@ from ACT_ICD9CM_DX_2018AA d, concept_dimension c
 where d.C_FULLNAME = C.CONCEPT_PATH
   and (c_basecode is not null and c_basecode <> '')
 UNION
-/* <PE.1> Check that this subquery returns the concept codes your site added to 
+/* <PE.2> Check that this subquery returns the concept codes your site added to 
   xref_LoyaltyCode_paths are returned correctly */
 Select distinct c.concept_cd
 from CONCEPT_DIMENSION c, DBO.xref_LoyaltyCode_paths x 
@@ -171,7 +171,7 @@ where c.CONCEPT_PATH LIKE x.ACT_PATH+'%'  ----- > This block of code handles any
   and (NULLIF(c.CONCEPT_CD,'') is not null)
   and (NULLIF(x.SiteSpecificCode,'') is not null)
   and x.[code_type] = 'DX'
-/* </PE.1> */
+/* </PE.2> */
 )
 , MedCodes as (
 Select  distinct c_basecode as CONCEPT_CD

@@ -141,7 +141,7 @@ if object_id('tempdb..#DX_baseline_FULL') is not null drop table #DX_baseline_FU
 	Into #DX_baseline_FULL
 	From observation_fact o, n 
 	Where o.CONCEPT_CD = n.CONCEPT_CD
-		AND o.START_DATE >=  dateadd(dd,-365, @indexDate)
+		AND o.START_DATE >=  dateadd(yy,-1,@indexDate)
 		AND o.START_DATE < @indexDate	
 	group by patient_num
 	
@@ -176,7 +176,7 @@ if object_id('tempdb..#DX_baseline_FULL') is not null drop table #DX_baseline_FU
 	into #DX_baseline
 	from observation_fact o, #DX_params p
 	where o.Concept_cd = p.CONCEPT_CD
-		AND o.START_DATE >=  dateadd(dd,-365, @indexDate)
+		AND o.START_DATE >=  dateadd(yy,-1,@indexDate)
 		AND o.START_DATE < @indexDate
    
 Set @MessageCnt = @MessageCnt + 1 
@@ -207,7 +207,7 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
 	into #PX_baseline
 	from observation_fact o, #PX_params p
 	where o.CONCEPT_CD = p.CONCEPT_CD
-		AND o.START_DATE >=  dateadd(dd,-365, @indexDate)
+		AND o.START_DATE >=  dateadd(yy,-1,@indexDate)
 		AND o.START_DATE < @indexDate
 
 	CREATE CLUSTERED INDEX ndx_PX_bl ON #PX_baseline (patient_num, concept_cd, provider_id );
@@ -238,7 +238,7 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
 	into #lab_baseline
 	from observation_fact o, #Lab_params p
 	where o.CONCEPT_CD = p.CONCEPT_CD
-		AND o.START_DATE >=  dateadd(dd,-365, @indexDate)
+		AND o.START_DATE >=  dateadd(yy,-1,@indexDate)
 		AND o.START_DATE < @indexDate
 
 
@@ -271,7 +271,7 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
 							Select o.patient_num, count(distinct(convert(date,o.start_date))) as Counts 
 							From observation_fact o, MedCodes M
 							Where o.CONCEPT_CD = M.C_BASECODE
-									AND o.START_DATE >=  dateadd(dd,-365, @indexDate)
+									AND o.START_DATE >=  dateadd(yy,-1,@indexDate)
 									AND o.START_DATE < @indexDate
 							group by patient_num
 							)  X
@@ -287,7 +287,7 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
 	select patient_num , count(distinct convert(date, start_date)) as cnt  --count(distinct encounter_num) as cnt 
 	into #visit_outpatient
 	from visit_dimension 
-	where (START_DATE >=  dateadd(dd,-365, @indexDate)
+	where (START_DATE >=  dateadd(yy,-1,@indexDate)
 			AND START_DATE < @indexDate
 			)
 	AND 	[INOUT_CD] in (select distinct c_basecode
@@ -307,7 +307,7 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
 	select patient_num , count(distinct convert(date, start_date)) as cnt  --count(distinct encounter_num) as cnt 
 	into #visit_ED
 	from visit_dimension 
-	where (	START_DATE >=  dateadd(dd,-365, @indexDate)
+	where (	START_DATE >=  dateadd(yy,-1,@indexDate)
 			AND START_DATE < @indexDate
 			)
 	AND 	[INOUT_CD] in (select distinct c_basecode
@@ -327,7 +327,7 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
 	select patient_num , count(distinct encounter_num) as cnt --count(distinct convert(date, start_date)) as cnt
 	into #visit_inpatient
 	from visit_dimension 
-	where ( START_DATE >=  dateadd(dd,-365, @indexDate)
+	where ( START_DATE >=  dateadd(yy,-1,@indexDate)
 			AND START_DATE < @indexDate
 			)
 	AND 	[INOUT_CD] in (select distinct c_basecode
@@ -372,7 +372,7 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
 	--							From #px_params -- jgk isn't this only pts with a procedure code?
 	--							Where feature_name =  'MD visit') X					
 	--where O.CONCEPT_CD = X.CONCEPT_CD
-	--		AND (convert(date, START_DATE) >=  dateadd(dd,-365,convert(date,@indexDate))
+	--		AND (convert(date, START_DATE) >=  dateadd(yy,-1,convert(date,@indexDate))
 	--		AND convert(date, START_DATE) <= dateadd(dd,-1,convert(date,@indexDate))
 	--		)
 	--		AND (O.PROVIDER_ID is not null and O.provider_id <> '' and O.provider_id <> '@')

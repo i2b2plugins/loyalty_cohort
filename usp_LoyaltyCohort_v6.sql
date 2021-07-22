@@ -580,7 +580,7 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
     -- Do the same calculations as above for >=65 and <65
     
     select * into #cohort_old from #cohort where age>=65
-    select * into #cohort_young from #cohort where age<=65
+    select * into #cohort_young from #cohort where age<65
     
     -- >=65
     	INSERT INTO  #cohort_summary (Summary_Decsription, tablename, TotalSubjects, Num_Dx1, Num_Dx2, MedUse1, MedUse2, Mammography, PapTest, PSATest, Colonoscopy, FecalOccultTest, FluShot, 

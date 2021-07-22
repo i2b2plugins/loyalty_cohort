@@ -93,7 +93,7 @@ IF (@indexDate is not null and isdate(@indexDate) = 1 )
 			
 	        -- Change 4/15: Josh's paper limits to patients with at least one encounter during the entire 7 year study period, so we limit to patient with an encounter (ever)
 			INSERT INTO #Cohort (patient_num,age)
-			select distinct p.patient_num,floor(datediff(dd,BIRTH_DATE,@indexDate)/365.25) age  from patient_dimension p -- DWH 20210722: floor(datediff(dd,)/365.25 is more accurate -- (Note that age could be off by one)
+			select distinct p.patient_num,datediff(YEAR,BIRTH_DATE,@indexDate) age  from patient_dimension p -- (Note that age could be off by one)
 			 inner join visit_dimension v on v.patient_num=p.patient_num
 
 			 --Primary key in Create statement above creates  a clusterd index so not sure if index below is needed-AC

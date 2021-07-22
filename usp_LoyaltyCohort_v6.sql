@@ -95,6 +95,9 @@ IF (@indexDate is not null and isdate(@indexDate) = 1 )
 			INSERT INTO #Cohort (patient_num,age)
 			select distinct p.patient_num,datediff(YEAR,BIRTH_DATE,@indexDate) age  from patient_dimension p -- (Note that age could be off by one)
 			 inner join visit_dimension v on v.patient_num=p.patient_num
+       WHERE P.BIRTH_DATE IS NOT NULL /* ENSURE BIRTH_DATE IS NOT NULL FOR SUMMARY TABLE ISSUES LATER */
+          AND EXISTS (SELECT 1 FROM OBSERVATION_FACT WHERE PATIENT_NUM = P.PATIENT_NUM AND CONVERT(DATE,START_DATE) >= '20120101' AND CONCEPT_CD NOT LIKE 'DEM|%') /* AT LEAST ONE NON-DEMOGRAPHIC FACT AFTER 2012 */
+          AND (CONVERT(DATE,V.START_DATE) >= '20120101' AND CONVERT(DATE,V.START_DATE) < @indexDate)
 
 			 --Primary key in Create statement above creates  a clusterd index so not sure if index below is needed-AC
 			 create index cohort_pnum on #cohort(patient_num); -- jgk add an index on cohort

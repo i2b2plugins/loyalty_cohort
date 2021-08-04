@@ -93,8 +93,11 @@ IF (@indexDate is not null and isdate(@indexDate) = 1 )
 			
 	        -- Change 4/15: Josh's paper limits to patients with at least one encounter during the entire 7 year study period, so we limit to patient with an encounter (ever)
 			INSERT INTO #Cohort (patient_num,age)
-			select distinct p.patient_num,datediff(YEAR,BIRTH_DATE,@indexDate) age  from patient_dimension p -- (Note that age could be off by one)
+			select distinct p.patient_num,floor(datediff(dd,BIRTH_DATE,@indexDate)/365.25) age  from patient_dimension p -- dwh:20210722 floor(datediff(dd,)/365.25) is more accurate.
 			 inner join visit_dimension v on v.patient_num=p.patient_num
+       WHERE P.BIRTH_DATE IS NOT NULL /* ENSURE BIRTH_DATE IS NOT NULL FOR SUMMARY TABLE ISSUES LATER */
+          AND EXISTS (SELECT 1 FROM OBSERVATION_FACT WHERE PATIENT_NUM = P.PATIENT_NUM AND CONVERT(DATE,START_DATE) >= '20120101' AND CONCEPT_CD NOT LIKE 'DEM|%') /* AT LEAST ONE NON-DEMOGRAPHIC FACT AFTER 2012 */
+          AND (CONVERT(DATE,V.START_DATE) >= '20120101' AND CONVERT(DATE,V.START_DATE) < @indexDate)
 
 			 --Primary key in Create statement above creates  a clusterd index so not sure if index below is needed-AC
 			 create index cohort_pnum on #cohort(patient_num); -- jgk add an index on cohort
@@ -138,7 +141,7 @@ if object_id('tempdb..#DX_baseline_FULL') is not null drop table #DX_baseline_FU
 	Into #DX_baseline_FULL
 	From observation_fact o, n 
 	Where o.CONCEPT_CD = n.CONCEPT_CD
-		AND o.START_DATE >=  dateadd(dd,-365, @indexDate)
+		AND o.START_DATE >=  dateadd(yy,-1,@indexDate)
 		AND o.START_DATE < @indexDate	
 	group by patient_num
 	
@@ -173,7 +176,7 @@ if object_id('tempdb..#DX_baseline_FULL') is not null drop table #DX_baseline_FU
 	into #DX_baseline
 	from observation_fact o, #DX_params p
 	where o.Concept_cd = p.CONCEPT_CD
-		AND o.START_DATE >=  dateadd(dd,-365, @indexDate)
+		AND o.START_DATE >=  dateadd(yy,-1,@indexDate)
 		AND o.START_DATE < @indexDate
    
 Set @MessageCnt = @MessageCnt + 1 
@@ -204,7 +207,7 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
 	into #PX_baseline
 	from observation_fact o, #PX_params p
 	where o.CONCEPT_CD = p.CONCEPT_CD
-		AND o.START_DATE >=  dateadd(dd,-365, @indexDate)
+		AND o.START_DATE >=  dateadd(yy,-1,@indexDate)
 		AND o.START_DATE < @indexDate
 
 	CREATE CLUSTERED INDEX ndx_PX_bl ON #PX_baseline (patient_num, concept_cd, provider_id );
@@ -235,7 +238,7 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
 	into #lab_baseline
 	from observation_fact o, #Lab_params p
 	where o.CONCEPT_CD = p.CONCEPT_CD
-		AND o.START_DATE >=  dateadd(dd,-365, @indexDate)
+		AND o.START_DATE >=  dateadd(yy,-1,@indexDate)
 		AND o.START_DATE < @indexDate
 
 
@@ -268,7 +271,7 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
 							Select o.patient_num, count(distinct(convert(date,o.start_date))) as Counts 
 							From observation_fact o, MedCodes M
 							Where o.CONCEPT_CD = M.C_BASECODE
-									AND o.START_DATE >=  dateadd(dd,-365, @indexDate)
+									AND o.START_DATE >=  dateadd(yy,-1,@indexDate)
 									AND o.START_DATE < @indexDate
 							group by patient_num
 							)  X
@@ -284,7 +287,7 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
 	select patient_num , count(distinct convert(date, start_date)) as cnt  --count(distinct encounter_num) as cnt 
 	into #visit_outpatient
 	from visit_dimension 
-	where (START_DATE >=  dateadd(dd,-365, @indexDate)
+	where (START_DATE >=  dateadd(yy,-1,@indexDate)
 			AND START_DATE < @indexDate
 			)
 	AND 	[INOUT_CD] in (select distinct c_basecode
@@ -304,7 +307,7 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
 	select patient_num , count(distinct convert(date, start_date)) as cnt  --count(distinct encounter_num) as cnt 
 	into #visit_ED
 	from visit_dimension 
-	where (	START_DATE >=  dateadd(dd,-365, @indexDate)
+	where (	START_DATE >=  dateadd(yy,-1,@indexDate)
 			AND START_DATE < @indexDate
 			)
 	AND 	[INOUT_CD] in (select distinct c_basecode
@@ -324,7 +327,7 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
 	select patient_num , count(distinct encounter_num) as cnt --count(distinct convert(date, start_date)) as cnt
 	into #visit_inpatient
 	from visit_dimension 
-	where ( START_DATE >=  dateadd(dd,-365, @indexDate)
+	where ( START_DATE >=  dateadd(yy,-1,@indexDate)
 			AND START_DATE < @indexDate
 			)
 	AND 	[INOUT_CD] in (select distinct c_basecode
@@ -369,7 +372,7 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
 	--							From #px_params -- jgk isn't this only pts with a procedure code?
 	--							Where feature_name =  'MD visit') X					
 	--where O.CONCEPT_CD = X.CONCEPT_CD
-	--		AND (convert(date, START_DATE) >=  dateadd(dd,-365,convert(date,@indexDate))
+	--		AND (convert(date, START_DATE) >=  dateadd(yy,-1,convert(date,@indexDate))
 	--		AND convert(date, START_DATE) <= dateadd(dd,-1,convert(date,@indexDate))
 	--		)
 	--		AND (O.PROVIDER_ID is not null and O.provider_id <> '' and O.provider_id <> '@')
@@ -577,7 +580,7 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
     -- Do the same calculations as above for >=65 and <65
     
     select * into #cohort_old from #cohort where age>=65
-    select * into #cohort_young from #cohort where age<=65
+    select * into #cohort_young from #cohort where age<65
     
     -- >=65
     	INSERT INTO  #cohort_summary (Summary_Decsription, tablename, TotalSubjects, Num_Dx1, Num_Dx2, MedUse1, MedUse2, Mammography, PapTest, PSATest, Colonoscopy, FecalOccultTest, FluShot, 

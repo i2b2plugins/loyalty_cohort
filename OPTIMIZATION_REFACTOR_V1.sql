@@ -378,22 +378,83 @@ RAISERROR(N'Predicated Score v2 - Rows: %d - Total Execution (ms): %d  - Step Ru
 --SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
 --RAISERROR(N'Charlson Stats - Rows: %d - Total Execution (ms): %d  - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
 
-/* FINAL SUMMARIZATION OF RESULTS */
+/* Cohort Agegrp - Makes Predictive Score filtering easier in final step if pre-calculated */
 SET @STEPTTS = GETDATE()
 
+SELECT * 
+INTO #cohort_agegrp
+FROM (
+select patient_num
+,CAST(case when ISNULL(AGE,0)< 65 then 'Under 65' 
+     when AGE>=65 then 'Over 65' else null end AS VARCHAR(20)) as AGEGRP
+,Num_Dx1              AS Num_Dx1            
+,Num_Dx2              AS Num_Dx2            
+,MedUse1              AS MedUse1            
+,MedUse2              AS MedUse2            
+,Mammography          AS Mammography        
+,PapTest              AS PapTest            
+,PSATest              AS PSATest            
+,Colonoscopy          AS Colonoscopy        
+,FecalOccultTest      AS FecalOccultTest    
+,FluShot              AS FluShot            
+,PneumococcalVaccine  AS PneumococcalVaccine
+,BMI                  AS BMI                
+,A1C                  AS A1C                
+,MedicalExam          AS MedicalExam        
+,INP1_OPT1_Visit      AS INP1_OPT1_Visit    
+,OPT2_Visit           AS OPT2_Visit         
+,ED_Visit             AS ED_Visit           
+,MDVisit_pname2       AS MDVisit_pname2     
+,MDVisit_pname3       AS MDVisit_pname3     
+,Routine_Care_2       AS Routine_Care_2     
+,Predicted_score      AS Predicted_score
+from #cohort
+UNION 
+select patient_num
+,'All Patients' AS AGEGRP
+,Num_Dx1              AS Num_Dx1            
+,Num_Dx2              AS Num_Dx2            
+,MedUse1              AS MedUse1            
+,MedUse2              AS MedUse2            
+,Mammography          AS Mammography        
+,PapTest              AS PapTest            
+,PSATest              AS PSATest            
+,Colonoscopy          AS Colonoscopy        
+,FecalOccultTest      AS FecalOccultTest    
+,FluShot              AS FluShot            
+,PneumococcalVaccine  AS PneumococcalVaccine
+,BMI                  AS BMI                
+,A1C                  AS A1C                
+,MedicalExam          AS MedicalExam        
+,INP1_OPT1_Visit      AS INP1_OPT1_Visit    
+,OPT2_Visit           AS OPT2_Visit         
+,ED_Visit             AS ED_Visit           
+,MDVisit_pname2       AS MDVisit_pname2     
+,MDVisit_pname3       AS MDVisit_pname3     
+,Routine_Care_2       AS Routine_Care_2     
+,Predicted_score      AS Predicted_score
+from #cohort
+)cag;
+
+SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
+RAISERROR(N'Prepare #cohort_agegrp - Rows: %d - Total Execution (ms): %d  - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
+
+
+/* FINAL SUMMARIZATION OF RESULTS */
+SET @STEPTTS = GETDATE()
 
 ;WITH CTE_PREDICTIVE AS (
 SELECT AGEGRP, MIN(PREDICTED_SCORE) PredictiveScoreCutoff
 FROM (
 SELECT AGEGRP, Predicted_score, NTILE(5) OVER (PARTITION BY AGEGRP ORDER BY PREDICTED_SCORE DESC) AS ScoreRank
 FROM(
-SELECT CAST(case when ISNULL(AGE,0)< 65 then 'Under 65' 
-     when AGE>=65           then 'Over 65' else null end AS VARCHAR(20)) as AGEGRP,
-     predicted_score
-from #cohort
-UNION ALL
-SELECT 'All Patients' as AGEGRP, predicted_score
-from #cohort
+--SELECT CAST(case when ISNULL(AGE,0)< 65 then 'Under 65' 
+--     when AGE>=65           then 'Over 65' else null end AS VARCHAR(20)) as AGEGRP,
+SELECT AGEGRP, predicted_score
+from #cohort_agegrp
+--UNION ALL
+--SELECT 'All Patients' as AGEGRP, predicted_score
+--from #cohort
 )SCORES
 )M
 WHERE ScoreRank=1
@@ -406,8 +467,7 @@ INTO DBO.loyalty_dev_summary
 FROM (
 SELECT
 'Patient Counts' as Summary_Description,
-CAST(case when ISNULL(AGE,0)< 65 then 'Under 65' 
-     when age>=65           then 'Over 65' else null end AS VARCHAR(20)) as AGEGRP, 
+CAG.AGEGRP, 
 count(distinct patient_num) as TotalSubjects,
 sum(cast([Num_Dx1] as int)) as Num_DX1,
 sum(cast([Num_Dx2] as int)) as Num_DX2,
@@ -431,14 +491,12 @@ sum(cast([MDVisit_pname3] as int)) as MDVisit_pname3,
 sum(cast([Routine_Care_2] as int)) as Routine_care_2,
 SUM(CAST(~(Num_Dx1|Num_Dx2|MedUse1|Mammography|PapTest|PSATest|Colonoscopy|FecalOccultTest|FluShot|PneumococcalVaccine|BMI|
   A1C|MedicalExam|INP1_OPT1_Visit|OPT2_Visit|ED_Visit|MDVisit_pname2|MDVisit_pname3|Routine_Care_2) AS INT)) as Subjects_NoCriteria /* inverted bitwise OR of all bit flags */
-from #cohort
-group by grouping sets ((case when ISNULL(AGE,0)< 65 then 'Under 65' 
-     when age>=65           then 'Over 65' else null end),())
+from #cohort_agegrp CAG JOIN CTE_PREDICTIVE P ON CAG.AGEGRP = P.AGEGRP AND CAG.Predicted_score >= P.PredictiveScoreCutoff
+group by CAG.AGEGRP
 UNION ALL
 SELECT
 'PercentOfSubjects' as Summary_Description,
-CAST(case when ISNULL(AGE,0)< 65 then 'Under 65' 
-     when age>=65           then 'Over 65' else null end AS VARCHAR(20)) as AGEGRP, 
+CAG.AGEGRP, 
 count(distinct patient_num) as TotalSubjects,
 100*avg(cast([Num_Dx1] as numeric(2,1))) as Num_DX1,
 100*avg(cast([Num_Dx2] as numeric(2,1))) as Num_DX2,
@@ -462,9 +520,8 @@ count(distinct patient_num) as TotalSubjects,
 100*avg(cast([Routine_Care_2] as numeric(2,1))) as Routine_care_2,
 100*AVG(CAST(~(Num_Dx1|Num_Dx2|MedUse1|Mammography|PapTest|PSATest|Colonoscopy|FecalOccultTest|FluShot|PneumococcalVaccine|BMI|
   A1C|MedicalExam|INP1_OPT1_Visit|OPT2_Visit|ED_Visit|MDVisit_pname2|MDVisit_pname3|Routine_Care_2) AS NUMERIC(2,1))) as Subjects_NoCriteria /* inverted bitwise OR of all bit flags */
-from #cohort
-group by grouping sets ((case when ISNULL(AGE,0)< 65 then 'Under 65' 
-     when age>=65           then 'Over 65' else null end),())
+from #cohort_agegrp CAG JOIN CTE_PREDICTIVE P ON CAG.AGEGRP = P.AGEGRP AND CAG.Predicted_score >= P.PredictiveScoreCutoff
+group by CAG.AGEGRP
 )COHORTAGG
   JOIN CTE_PREDICTIVE CP
     ON ISNULL(COHORTAGG.AGEGRP,'All Patients') = CP.AGEGRP

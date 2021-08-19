@@ -1,4 +1,4 @@
-/****** Object:  StoredProcedure [dbo].[usp_LoyaltyCohort]    Script Date: 4/14/2021 ******/
+/****** Object:  StoredProcedure [dbo].[usp_LoyaltyCohort]    Script Date: 8/4/2021 ******/
 SET ANSI_NULLS ON
 GO
 
@@ -22,7 +22,7 @@ SET XACT_ABORT ON
 Implements the loyalty cohort algorithm defined in 
   "External Validation of an Algorithm to Identify Patients with High Data-Completeness in Electronic Health Records for Comparative Effectiveness Research" by Lin et al.
 
-Written primarily by Andrew Cagan with contributions from: Jeff Klann, PhD; Barbara Benoit
+Written primarily by Andrew Cagan with contributions from: Jeff Klann, PhD; Barbara Benoit; Darren Henderson
 
 Calculating 20 variables over the baseline period, attempting to predict the # of subjects who will most likely present for future follow-up
 
@@ -33,7 +33,7 @@ To run, exec usp_LoyaltyCohort @indexDate <---- Insert date here
 
 This will create two tables on your db, loyalty_dev and loyalty_dev_summary
 
-It is ok under the SHRINE IRB to export this: select * from loyalty_dev_summary where Summary_Decsription='PercentOfSubjects'
+It is ok under the SHRINE IRB to export this: select * from loyalty_dev_summary where Summary_Description='PercentOfSubjects'
 This is the output at the end of the script or you can run it manually. It is percentages, a predictive score, and an obfuscated count of total patients.
 
 ***** Standard i2b2 table naming conventions are used - Observation_fact, concept_dimension, patient_dimension.
@@ -47,6 +47,7 @@ This is the output at the end of the script or you can run it manually. It is pe
 		 - the UPDATE CASE for the provider count variables was using an 'In' which could cause a larger data set to perform the update slowly, changed to 2 different join statements instead
 		 - Update to perform procedure code over already retrieved baseline period instead of going against full fact table
 	 JGK - added code to calculate summary stats and cutoff for Over 65 and Under 65
+	  DH - various bug fixes (leap year, age calculation acccuracy...)
 
 */
 
@@ -133,7 +134,7 @@ if object_id('tempdb..#DX_baseline_FULL') is not null drop table #DX_baseline_FU
 			C.Concept_path = x.act_path											----- > This block of code handles any local dx codes
 	and (d.c_basecode is not null and d.c_basecode <> '')						-----
 	and x.SiteSpecificCode is not null											-----
-	and x.[code type] = 'DX'		
+	and x.[code_type] = 'DX'		
 	)	
 
     ----a. Get count of any diagnosis for the baseline period
@@ -163,7 +164,7 @@ if object_id('tempdb..#DX_baseline_FULL') is not null drop table #DX_baseline_FU
 	into #DX_params
 	from [dbo].[xref_LoyaltyCode_paths] L, concept_dimension c
 	where C.CONCEPT_PATH like L.Act_path+'%'  --jgk: must support local children
-	AND [code type] = 'DX'
+	AND [code_type] = 'DX'
 	and (act_path <> '**Not Found' and act_path is not null)
 	
 
@@ -193,7 +194,7 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
 	into #PX_params
 	from [dbo].[xref_LoyaltyCode_paths] L, concept_dimension c
 	where  C.CONCEPT_PATH like L.Act_path+'%' -- jgk
-	AND [code type] = 'PX'
+	AND [code_type] = 'PX'
 	and (act_path <> '**Not Found' and act_path is not null)
 	
 	
@@ -225,7 +226,7 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
 	into #Lab_params
 	from [dbo].[xref_LoyaltyCode_paths] L, concept_dimension c
 	where  C.CONCEPT_PATH like L.Act_path+'%' -- jgk
-	AND [code type] = 'lab'
+	AND [code_type] = 'lab'
 	and (act_path <> '**Not Found' and act_path is not null)
 	
 
@@ -295,7 +296,7 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
 							
 									(select distinct act_path 
 									from [dbo].[xref_LoyaltyCode_paths]
-									where [code type] = 'visit' and feature_name = 'outpatient encounter'
+									where [code_type] = 'visit' and feature_name = 'outpatient encounter'
 									and act_path is not null) X
 							where X.ACT_PATH like N.C_FULLNAME+'%' -- jgk
 							)
@@ -315,7 +316,7 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
 							
 									(select distinct act_path 
 									from [dbo].[xref_LoyaltyCode_paths]
-									where [code type] = 'visit' and feature_name = 'ED encounter'
+									where [code_type] = 'visit' and feature_name = 'ED encounter'
 									and act_path is not null) X
 							where X.ACT_PATH like N.C_FULLNAME+'%' -- jgk
 							)
@@ -335,7 +336,7 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
 							
 									(select distinct act_path 
 									from [dbo].[xref_LoyaltyCode_paths]
-									where [code type] = 'visit' and feature_name = 'inpatient encounter'
+									where [code_type] = 'visit' and feature_name = 'inpatient encounter'
 									and act_path is not null) X
 							where X.ACT_PATH like N.C_FULLNAME+'%' -- jgk
 							)
@@ -481,7 +482,7 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
 
 	-----Get Summary Data for testing. 
 			CREATE TABLE #cohort_summary (
-			Summary_Decsription nvarchar(50) null,
+			Summary_Description nvarchar(50) null,
 			tablename nvarchar(50),
 			TotalSubjects int null,
 			Num_Dx1 Decimal(16,2) NOT null DEFAULT 0,
@@ -508,7 +509,7 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
 			PredictiveScoreCutoff Float not null DEFAULT 0
 				)
 
-	INSERT INTO  #cohort_summary (Summary_Decsription, tablename, TotalSubjects, Num_Dx1, Num_Dx2, MedUse1, MedUse2, Mammography, PapTest, PSATest, Colonoscopy, FecalOccultTest, FluShot, 
+	INSERT INTO  #cohort_summary (Summary_Description, tablename, TotalSubjects, Num_Dx1, Num_Dx2, MedUse1, MedUse2, Mammography, PapTest, PSATest, Colonoscopy, FecalOccultTest, FluShot, 
 					PneumococcalVaccine, BMI, A1C, MedicalExam, INP1_OPT1_Visit, OPT2_Visit, ED_Visit, MDVisit_pname2, MDVisit_pname3, Routine_Care_2, Subjects_NoCriteria)
 	SELECT
 		'Patient Counts' as Summary_Description, 'All Patients' as tablename,
@@ -540,7 +541,7 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
 			and OPT2_Visit = 0 and ED_Visit = 0 and MDVisit_pname2 = 0 and MDVisit_pname3 = 0 and Routine_Care_2 = 0) as Subjects_NoCriteria
  
 
-	INSERT INTO #cohort_summary (Summary_Decsription,  tablename, TotalSubjects, Num_Dx1, Num_Dx2, MedUse1, MedUse2, Mammography, PapTest, PSATest, Colonoscopy, FecalOccultTest, FluShot, 
+	INSERT INTO #cohort_summary (Summary_Description,  tablename, TotalSubjects, Num_Dx1, Num_Dx2, MedUse1, MedUse2, Mammography, PapTest, PSATest, Colonoscopy, FecalOccultTest, FluShot, 
 						PneumococcalVaccine, BMI, A1C, MedicalExam, INP1_OPT1_Visit, OPT2_Visit, ED_Visit, MDVisit_pname2, MDVisit_pname3, Routine_Care_2, Subjects_NoCriteria)
 	select  'PercentOfSubjects', 'All Patients'
 	   , (select count(distinct patient_num) from #cohort) as TotalSubjects
@@ -583,7 +584,7 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
     select * into #cohort_young from #cohort where age<65
     
     -- >=65
-    	INSERT INTO  #cohort_summary (Summary_Decsription, tablename, TotalSubjects, Num_Dx1, Num_Dx2, MedUse1, MedUse2, Mammography, PapTest, PSATest, Colonoscopy, FecalOccultTest, FluShot, 
+    	INSERT INTO  #cohort_summary (Summary_Description, tablename, TotalSubjects, Num_Dx1, Num_Dx2, MedUse1, MedUse2, Mammography, PapTest, PSATest, Colonoscopy, FecalOccultTest, FluShot, 
 					PneumococcalVaccine, BMI, A1C, MedicalExam, INP1_OPT1_Visit, OPT2_Visit, ED_Visit, MDVisit_pname2, MDVisit_pname3, Routine_Care_2, Subjects_NoCriteria)
 	SELECT
 		'Patient Counts' as Summary_Description, 'Over 65' as tablename,
@@ -614,7 +615,7 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
 			and PneumococcalVaccine = 0 and BMI  = 0 and A1C = 0 and  MedicalExam  = 0 and INP1_OPT1_Visit  = 0 
 			and OPT2_Visit = 0 and ED_Visit = 0 and MDVisit_pname2 = 0 and MDVisit_pname3 = 0 and Routine_Care_2 = 0) as Subjects_NoCriteria
 			
-	INSERT INTO #cohort_summary (Summary_Decsription, tablename, TotalSubjects, Num_Dx1, Num_Dx2, MedUse1, MedUse2, Mammography, PapTest, PSATest, Colonoscopy, FecalOccultTest, FluShot, 
+	INSERT INTO #cohort_summary (Summary_Description, tablename, TotalSubjects, Num_Dx1, Num_Dx2, MedUse1, MedUse2, Mammography, PapTest, PSATest, Colonoscopy, FecalOccultTest, FluShot, 
 						PneumococcalVaccine, BMI, A1C, MedicalExam, INP1_OPT1_Visit, OPT2_Visit, ED_Visit, MDVisit_pname2, MDVisit_pname3, Routine_Care_2, Subjects_NoCriteria)
 	select  'PercentOfSubjects','Over 65'
 	   , (select count(distinct patient_num) from #cohort_old) as TotalSubjects
@@ -652,7 +653,7 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
 	
 	-- <65
 
-		INSERT INTO  #cohort_summary (Summary_Decsription, tablename, TotalSubjects, Num_Dx1, Num_Dx2, MedUse1, MedUse2, Mammography, PapTest, PSATest, Colonoscopy, FecalOccultTest, FluShot, 
+		INSERT INTO  #cohort_summary (Summary_Description, tablename, TotalSubjects, Num_Dx1, Num_Dx2, MedUse1, MedUse2, Mammography, PapTest, PSATest, Colonoscopy, FecalOccultTest, FluShot, 
 					PneumococcalVaccine, BMI, A1C, MedicalExam, INP1_OPT1_Visit, OPT2_Visit, ED_Visit, MDVisit_pname2, MDVisit_pname3, Routine_Care_2, Subjects_NoCriteria)
 	SELECT
 		'Patient Counts' as Summary_Description,
@@ -684,7 +685,7 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
 			and PneumococcalVaccine = 0 and BMI  = 0 and A1C = 0 and  MedicalExam  = 0 and INP1_OPT1_Visit  = 0 
 			and OPT2_Visit = 0 and ED_Visit = 0 and MDVisit_pname2 = 0 and MDVisit_pname3 = 0 and Routine_Care_2 = 0) as Subjects_NoCriteria
 	
-	INSERT INTO #cohort_summary (Summary_Decsription, tablename, TotalSubjects, Num_Dx1, Num_Dx2, MedUse1, MedUse2, Mammography, PapTest, PSATest, Colonoscopy, FecalOccultTest, FluShot, 
+	INSERT INTO #cohort_summary (Summary_Description, tablename, TotalSubjects, Num_Dx1, Num_Dx2, MedUse1, MedUse2, Mammography, PapTest, PSATest, Colonoscopy, FecalOccultTest, FluShot, 
 						PneumococcalVaccine, BMI, A1C, MedicalExam, INP1_OPT1_Visit, OPT2_Visit, ED_Visit, MDVisit_pname2, MDVisit_pname3, Routine_Care_2, Subjects_NoCriteria)
 	select  'PercentOfSubjects','Under 65'
 	  , (select count(distinct patient_num) from #cohort_young) as TotalSubjects
@@ -723,12 +724,12 @@ RAISERROR(@MessageText,0,1) WITH NOWAIT;
     -- Add obfuscated patient counts to the percent
     update s set TotalSubjects=s2.TotalSubjects + FLOOR(ABS(BINARY_CHECKSUM(NEWID())/2147483648.0)*(10*2+1)) - 10 
 	  from #cohort_summary as s inner join #cohort_summary as s2 on s.tablename=s2.tablename
-	  where s.Summary_Decsription='PercentOfSubjects' and s2.Summary_Decsription='Patient Counts'
+	  where s.Summary_Description='PercentOfSubjects' and s2.Summary_Description='Patient Counts'
    
    	if object_id('loyalty_dev_summary') is not null drop table loyalty_dev_summary --------->>>Change db name to your specific db
 	select * into loyalty_dev_summary from #cohort_summary  --------->>>Change db name to your specific db
 
-    select * from loyalty_dev_summary where Summary_Decsription='PercentOfSubjects' order by Summary_Decsription -- THIS IS OK TO EXPORT!
+    select * from loyalty_dev_summary where Summary_Description='PercentOfSubjects' order by Summary_Description -- THIS IS OK TO EXPORT!
 
     END
 Else
@@ -736,6 +737,5 @@ Else
 
 
 GO
-
 
 

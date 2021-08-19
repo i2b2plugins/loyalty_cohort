@@ -1,9 +1,9 @@
---IF OBJECT_ID(N'DBO.usp_LoyaltyCohort_opt') IS NOT NULL DROP PROCEDURE DBO.usp_LoyaltyCohort_opt
---GO
+IF OBJECT_ID(N'DBO.usp_LoyaltyCohort_opt_5y') IS NOT NULL DROP PROCEDURE DBO.usp_LoyaltyCohort_opt_5y
+GO
 
---CREATE PROC DBO.usp_LoyaltyCohort_opt
---    @indexDate datetime
---AS
+CREATE PROC DBO.usp_LoyaltyCohort_opt_5y
+    @indexDate datetime
+AS
 
 /* 
    CHECK ANY CUSTOM LOCAL CODES ADDED TO xref_LoyaltyCode_paths AT <PE.1> AND <PE.2> - PLEASE SEE COMMENTS
@@ -13,14 +13,14 @@ SET NOCOUNT ON
 SET XACT_ABORT ON
 
 /* UNCOMMENT IF TESTING PROC BODY ALONE */
-DECLARE @indexDate DATE='20210201'
+--DECLARE @indexDate DATE='20210201'
 
 IF OBJECT_ID(N'tempdb..#DEMCONCEPT', N'U') IS NOT NULL DROP TABLE #DEMCONCEPT;
 IF OBJECT_ID(N'tempdb..#cohort', N'U') IS NOT NULL DROP TABLE #cohort;
 IF OBJECT_ID(N'tempdb..#cohort_agegrp', N'U') IS NOT NULL DROP TABLE #cohort_agegrp;
 IF OBJECT_ID(N'tempdb..#COHORT_CHARLSON', N'U') IS NOT NULL DROP TABLE #COHORT_CHARLSON;
 IF OBJECT_ID(N'tempdb..#CHARLSON_STATS', N'U') IS NOT NULL DROP TABLE #CHARLSON_STATS;
-IF OBJECT_ID(N'DBO.loyalty_dev_summary', N'U') IS NOT NULL DROP TABLE DBO.loyalty_dev_summary;
+IF OBJECT_ID(N'DBO.loyalty_dev_summary_5y', N'U') IS NOT NULL DROP TABLE DBO.loyalty_dev_summary_5y;
 
 DECLARE @STARTTS DATETIME = GETDATE()
 DECLARE @STEPTTS DATETIME 
@@ -104,7 +104,7 @@ FROM VISIT_DIMENSION V
     ON V.PATIENT_NUM = NONDEMFACT.PATIENT_NUM
   LEFT JOIN VISITTYPE VT
     ON V.INOUT_CD = VT.C_BASECODE 
-      AND CONVERT(DATE,V.START_DATE) >= dateadd(YY,-1, @indexDate) AND CONVERT(DATE,V.START_DATE) < @indexDate
+      AND CONVERT(DATE,V.START_DATE) >= dateadd(YY,-5, @indexDate) AND CONVERT(DATE,V.START_DATE) < @indexDate
       /* RESTRICT LEFT JOIN TO VISIT TYPE ON LAST YEAR OF VISITS FOR NUMERATOR OF THOSE THREE VARIABLES 
          REST OF THE VISITS WILL HAVE NULL AND GET CONVERTED TO 0 IN MAX(CASE STATEMENTS ABOVE 
          SO WE WILL STILL GET RECORDS FROM 2012-2019 WITH 0,0,0 FOR THE THREE FLAGS WE'RE MAKING IF
@@ -165,7 +165,7 @@ FROM #COHORT C,
       , MAX(CASE WHEN P.Feature_name = 'A1C' THEN 1 ELSE 0 END) AS A1C
       from OBSERVATION_FACT o, CTE_PARAMS p
       where o.CONCEPT_CD = p.CONCEPT_CD
-      AND o.START_DATE >=  dateadd(yy,-1, @indexDate)
+      AND o.START_DATE >=  dateadd(yy,-5, @indexDate)
       AND o.START_DATE < @indexDate
       GROUP BY O.PATIENT_NUM, O.PROVIDER_ID /* AGG AT PROVIDER_ID FIRST LEVEL FOR THE MDVisit_pname VARIABLES */
     )PA /* PROVIDER GRAIN AGG->BASELINE -- AGG AT PATIENT_NUM GRAIN */
@@ -230,7 +230,7 @@ WHERE CHARINDEX(':',CONCEPT_CD) > 0
     , COUNT(DISTINCT CONVERT(DATE,O.START_DATE)) AS CATCNT
   FROM OBSERVATION_FACT O, CTE_CATGRY p
         where o.CONCEPT_CD = P.CONCEPT_CD
-        AND o.START_DATE >=  dateadd(yy,-1, @indexDate)
+        AND o.START_DATE >=  dateadd(yy,-5, @indexDate)
         AND o.START_DATE < @indexDate
   GROUP BY O.PATIENT_NUM, P.CATGRY
   )CA
@@ -489,7 +489,7 @@ GROUP BY AGEGRP
 SELECT CUTOFF_FILTER_YN, Summary_Description, COHORTAGG.AGEGRP as tablename, TotalSubjects, Num_DX1, Num_DX2, MedUSe1, MedUse2, Mammography, PapTest, PSATest, Colonoscopy, FecalOccultTest
   , FluShot, PneumococcalVaccine, BMI, A1C, MedicalExam, INP1_OPT1_Visit, OPT2_Visit, ED_Visit, MDVisit_pname2, MDVisit_pname3, Routine_care_2, Subjects_NoCriteria, CP.PredictiveScoreCutoff
   --, CS.MEAN_10YRPROB, CS.MEDIAN_10YR_SURVIVAL, CS.MODE_10YRPROB, CS.STDEV_10YRPROB
-INTO DBO.loyalty_dev_summary
+INTO DBO.loyalty_dev_summary_5y
 FROM (
 /* FILTERED BY PREDICTIVE CUTOFF */
 SELECT
@@ -621,4 +621,4 @@ group by CAG.AGEGRP
 SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
 RAISERROR(N'Final Summary Table - Rows: %d - Total Execution (ms): %d - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
 
-SELECT * FROM DBO.loyalty_dev_summary WHERE Summary_Description = 'PercentOfSubjects' ORDER BY CUTOFF_FILTER_YN, TABLENAME;
+SELECT * FROM DBO.loyalty_dev_summary_5y WHERE Summary_Description = 'PercentOfSubjects' ORDER BY CUTOFF_FILTER_YN, TABLENAME;

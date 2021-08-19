@@ -1,9 +1,9 @@
---IF OBJECT_ID(N'DBO.usp_LoyaltyCohort_opt') IS NOT NULL DROP PROCEDURE DBO.usp_LoyaltyCohort_opt
---GO
+IF OBJECT_ID(N'DBO.usp_LoyaltyCohort_opt') IS NOT NULL DROP PROCEDURE DBO.usp_LoyaltyCohort_opt
+GO
 
---CREATE PROC DBO.usp_LoyaltyCohort_opt
---    @indexDate datetime
---AS
+CREATE PROC DBO.usp_LoyaltyCohort_opt
+    @indexDate datetime
+AS
 
 /* 
    CHECK ANY CUSTOM LOCAL CODES ADDED TO xref_LoyaltyCode_paths AT <PE.1> AND <PE.2> - PLEASE SEE COMMENTS
@@ -13,7 +13,7 @@ SET NOCOUNT ON
 SET XACT_ABORT ON
 
 /* UNCOMMENT IF TESTING PROC BODY ALONE */
-DECLARE @indexDate DATE='20210201'
+--DECLARE @indexDate DATE='20210201'
 
 IF OBJECT_ID(N'tempdb..#DEMCONCEPT', N'U') IS NOT NULL DROP TABLE #DEMCONCEPT;
 IF OBJECT_ID(N'tempdb..#cohort', N'U') IS NOT NULL DROP TABLE #cohort;

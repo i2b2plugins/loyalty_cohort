@@ -621,4 +621,4 @@ group by CAG.AGEGRP
 SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
 RAISERROR(N'Final Summary Table - Rows: %d - Total Execution (ms): %d - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
 
-SELECT * FROM DBO.loyalty_dev_summary_10y WHERE Summary_Description = 'PercentOfSubjects' ORDER BY CUTOFF_FILTER_YN, TABLENAME;
+

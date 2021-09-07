@@ -2,7 +2,11 @@ IF OBJECT_ID(N'DBO.usp_LoyaltyCohort_opt') IS NOT NULL DROP PROCEDURE DBO.usp_Lo
 GO
 
 CREATE PROC DBO.usp_LoyaltyCohort_opt
-    @indexDate datetime
+     @indexDate datetime
+    ,@site varchar(10) 
+    ,@lookbackYears int = 1 /* DEFAULT TO 1 YEAR */
+    ,@gendered bit = 0 /* DEFAULT TO NON GENDER VERSION */
+    ,@output bit = 1 /* DEFAULT TO SHOW FINAL OUTPUT */
 AS
 
 /* 
@@ -14,21 +18,153 @@ SET XACT_ABORT ON
 
 /* UNCOMMENT IF TESTING PROC BODY ALONE */
 --DECLARE @indexDate DATE='20210201'
+--DECLARE @site VARCHAR(10) = '' /* ALTER TO YOUR DESIRED SITE CODE */
+--DECLARE @lookbackYears INT = 1
+--DECLARE @gendered BIT = 0
+--DECLARE @output BIT = 1
 
+/* create the target summary table if not exists */
+IF OBJECT_ID(N'dbo.loyalty_dev_summary', N'U') IS NULL
+  CREATE TABLE dbo.[loyalty_dev_summary](
+    [SITE] VARCHAR(10) NOT NULL,
+    [GENDER_DENOMINATORS_YN] char(1) NOT NULL,
+    [CUTOFF_FILTER_YN] char(1) NOT NULL,
+	  [Summary_Description] varchar(20) NOT NULL,
+	  [tablename] [varchar](20) NULL,
+	  [Num_DX1] float NULL,
+	  [Num_DX2] float NULL,
+	  [MedUse1] float NULL,
+	  [MedUse2] float NULL,
+	  [Mammography] float NULL,
+	  [PapTest] float NULL,
+	  [PSATest] float NULL,
+	  [Colonoscopy] float NULL,
+	  [FecalOccultTest] float NULL,
+	  [FluShot] float NULL,
+	  [PneumococcalVaccine] float NULL,
+	  [BMI] float NULL,
+	  [A1C] float NULL,
+	  [MedicalExam] float NULL,
+	  [INP1_OPT1_Visit] float NULL,
+	  [OPT2_Visit] float NULL,
+	  [ED_Visit] float NULL,
+	  [MDVisit_pname2] float NULL,
+	  [MDVisit_pname3] float NULL,
+	  [Routine_care_2] float NULL,
+	  [Subjects_NoCriteria] float NULL,
+	  [PredictiveScoreCutoff] float NULL,
+	  [MEAN_10YRPROB] float NULL,
+	  [MEDIAN_10YR_SURVIVAL] float NULL,
+	  [MODE_10YRPROB] float NULL,
+	  [STDEV_10YRPROB] float NULL,
+    [TotalSubjects] int NULL,
+    [TotalSubjectsFemale] int NULL,
+    [TotalSubjectsMale] int NULL,
+    [EXTRACT_DTTM] DATETIME NOT NULL DEFAULT GETDATE(),
+    [LOOKBACK_YR] INT NOT NULL,
+    [RUNTIMEms] int NULL
+  )
+
+/* ENSURE TEMP IS CLEAR FROM PREVIOUS RUNS */
+IF OBJECT_ID(N'tempdb..#DEMCONCEPT', N'U') IS NOT NULL DROP TABLE #DEMCONCEPT;
+IF OBJECT_ID(N'tempdb..#LC_DOMAIN_CONCEPTS', N'U') IS NOT NULL DROP TABLE #LC_DOMAIN_CONCEPTS;
+IF OBJECT_ID(N'tempdb..#PATCONC', N'U') IS NOT NULL DROP TABLE #PATCONC;
+IF OBJECT_ID(N'tempdb..#OBS_FACT', N'U') IS NOT NULL DROP TABLE #OBS_FACT;
+IF OBJECT_ID(N'tempdb..#INCLPAT', N'U') IS NOT NULL DROP TABLE #INCLPAT;
+IF OBJECT_ID(N'tempdb..#VISIT_DIM', N'U') IS NOT NULL DROP TABLE #VISIT_DIM;
 IF OBJECT_ID(N'tempdb..#cohort', N'U') IS NOT NULL DROP TABLE #cohort;
+IF OBJECT_ID(N'tempdb..#cohort_agegrp', N'U') IS NOT NULL DROP TABLE #cohort_agegrp;
+IF OBJECT_ID(N'tempdb..#AGEGRP_PSC', N'U') IS NOT NULL DROP TABLE #AGEGRP_PSC;
+IF OBJECT_ID(N'tempdb..#CHARLSON_VISIT_BASE', N'U') IS NOT NULL DROP TABLE #CHARLSON_VISIT_BASE;
+IF OBJECT_ID(N'tempdb..#CHARLSON_DX', N'U') IS NOT NULL DROP TABLE #CHARLSON_DX;
 IF OBJECT_ID(N'tempdb..#COHORT_CHARLSON', N'U') IS NOT NULL DROP TABLE #COHORT_CHARLSON;
 IF OBJECT_ID(N'tempdb..#CHARLSON_STATS', N'U') IS NOT NULL DROP TABLE #CHARLSON_STATS;
-IF OBJECT_ID(N'DBO.loyalty_dev_summary', N'U') IS NOT NULL DROP TABLE DBO.loyalty_dev_summary;
-IF OBJECT_ID(N'DBO.loyalty_dev', N'U') IS NOT NULL DROP TABLE DBO.loyalty_dev;
 
 DECLARE @STARTTS DATETIME = GETDATE()
 DECLARE @STEPTTS DATETIME 
 DECLARE @ENDRUNTIMEms INT, @STEPRUNTIMEms INT
 DECLARE @ROWS INT
 
+/* PRE-BUILD A BARE MINIMUM DATA MODEL FOR THE SCRIPT */
+
+RAISERROR(N'Starting prebuild phase.', 1, 1) with nowait;
+
+/* EXTRACT DEMOGRAPHIC CONCEPTS */
+SELECT DISTINCT CONCEPT_CD
+  , SUBSTRING(CONCEPT_CD,1,CHARINDEX(':',CONCEPT_CD)-1) AS CONCEPT_PREFIX 
+INTO #DEMCONCEPT
+FROM CONCEPT_DIMENSION
+WHERE CONCEPT_PATH LIKE '\ACT\Demographics%'
+  AND CONCEPT_CD != ''
+
+/* EXTRACT DOMAIN CONCEPTS FOR FEATURES IN THE THE PATHS TABLE */
+SELECT DISTINCT P.Feature_name, P.code_type, CD.CONCEPT_CD
+INTO #LC_DOMAIN_CONCEPTS
+FROM CONCEPT_DIMENSION CD
+  JOIN dbo.xref_LoyaltyCode_paths P
+    ON CD.CONCEPT_PATH = P.ACT_PATH
+
+;WITH CODES AS ( 
+SELECT DISTINCT 'DEM' AS CONCEPT_TYPE, CONCEPT_CD FROM #DEMCONCEPT UNION ALL
+SELECT DISTINCT 'LC DOMAIN FACT' AS CONCEPT_TYPE, CONCEPT_CD FROM #LC_DOMAIN_CONCEPTS
+)
+SELECT PATIENT_NUM, CONCEPT_TYPE, CONCEPT_CD, PROVIDER_ID, [START_DATE]
+INTO #OBS_FACT
+FROM (
+SELECT DISTINCT PATIENT_NUM
+  , LDC.CONCEPT_TYPE
+  , O.CONCEPT_CD
+  , PROVIDER_ID
+  , CONVERT(DATE,START_DATE) AS [START_DATE]
+FROM OBSERVATION_FACT O 
+  JOIN CODES LDC
+    ON O.CONCEPT_CD = LDC.CONCEPT_CD
+        AND LDC.CONCEPT_TYPE = 'LC DOMAIN FACT'
+WHERE START_DATE >= DATEADD(YY,-@lookbackYears,@indexDate) AND START_DATE < @indexDate
+UNION ALL
+SELECT PATIENT_NUM
+  , ISNULL(C.CONCEPT_TYPE,'OTHER') CONCEPT_TYPE
+  , O.CONCEPT_CD AS CONCEPT_CD
+  , NULL AS PROVIDER_ID
+  , MAX(CONVERT(DATE,START_DATE)) AS [START_DATE]
+FROM OBSERVATION_FACT O
+  LEFT JOIN CODES C
+    ON O.CONCEPT_CD = C.CONCEPT_CD
+WHERE START_DATE >= CAST('20120101' AS DATETIME) AND START_DATE < @indexDate
+GROUP BY PATIENT_NUM, ISNULL(C.CONCEPT_TYPE,'OTHER'), O.CONCEPT_CD
+)U
+
+CREATE INDEX IDX_OBS ON #OBS_FACT (PATIENT_NUM) INCLUDE (CONCEPT_CD, START_DATE)
+
+/* include only patients with non-demographic concepts after 20120101 */
+SELECT O.PATIENT_NUM
+INTO #INCLPAT
+FROM #OBS_FACT O
+WHERE CONCEPT_TYPE != 'DEM'
+GROUP BY PATIENT_NUM
+
+/* create #vis_dim */
+SELECT DISTINCT V.PATIENT_NUM, CONVERT(DATE,V.START_DATE) START_DATE, V.INOUT_CD, FLOOR(DATEDIFF(DD,P.BIRTH_DATE,@indexDate)/365.25) AS AGE, REPLACE(P.SEX_CD,'DEM|SEX:','') AS SEX
+INTO #VISIT_DIM
+FROM VISIT_DIMENSION V
+  JOIN #INCLPAT INCL
+    ON V.PATIENT_NUM = INCL.PATIENT_NUM
+  JOIN PATIENT_DIMENSION P
+    ON V.PATIENT_NUM = P.PATIENT_NUM
+WHERE V.START_DATE >= CAST('20120101 00:00:00' AS DATETIME) AND V.START_DATE < @indexDate
+  AND P.BIRTH_DATE IS NOT NULL
+
+SET @ROWS = @@ROWCOUNT
+
+CREATE NONCLUSTERED INDEX IDX_VIS ON #VISIT_DIM ([PATIENT_NUM]) INCLUDE ([START_DATE],[INOUT_CD])
+
+SELECT @ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
+RAISERROR(N'Prebuild 2012 non-demographic fact inclusion model - Rows: %d - Total Execution (ms): %d - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
+/* FINISH PRE-BUILD ACT MODEL */
 
 CREATE TABLE #cohort (
 patient_num INT NOT NULL PRIMARY KEY,
+sex varchar(50) null,
 age int null,
 Num_Dx1 bit not null DEFAULT 0,
 Num_Dx2 bit not null DEFAULT 0,
@@ -66,28 +202,22 @@ select distinct feature_name, c_basecode
       where X.ACT_PATH like N.C_FULLNAME+'%'
       and C_BASECODE is not null
 )
-INSERT INTO #COHORT (PATIENT_NUM, AGE, INP1_OPT1_Visit, OPT2_Visit, ED_Visit)
+INSERT INTO #COHORT (PATIENT_NUM, SEX, AGE, INP1_OPT1_Visit, OPT2_Visit, ED_Visit)
 SELECT V.PATIENT_NUM
-    , FLOOR(DATEDIFF(DD,BIRTH_DATE,@indexDate)/365.25) AS AGE
+    , V.SEX
+    , V.AGE
     , CAST(MAX(CASE WHEN VT.feature_name = 'inpatient encounter' THEN 1 ELSE 0 END) AS BIT) | CAST(MAX(CASE WHEN VT.feature_name = 'outpatient encounter' THEN 1 ELSE 0 END) AS BIT) INP1_OPT1_VISIT
     , CASE WHEN COUNT(DISTINCT CASE WHEN VT.feature_name = 'outpatient encounter' THEN CONVERT(DATE,V.START_DATE) ELSE NULL END) >= 2 THEN 1 ELSE 0 END AS OPT2_VISIT
     , MAX(CASE WHEN VT.feature_name = 'ED encounter' THEN 1 ELSE 0 END) ED_VISIT
-FROM VISIT_DIMENSION V
-  JOIN PATIENT_DIMENSION P
-    ON V.PATIENT_NUM = P.PATIENT_NUM
-  JOIN (SELECT DISTINCT PATIENT_NUM FROM OBSERVATION_FACT WHERE CONVERT(DATE,START_DATE) >= '20120101' AND CONCEPT_CD NOT LIKE 'DEM|%') NONDEMFACT /* AT LEAST ONE NON-DEMOGRAPHIC FACT AFTER 2012 */
-    ON V.PATIENT_NUM = NONDEMFACT.PATIENT_NUM
+FROM #VISIT_DIM V
   LEFT JOIN VISITTYPE VT
     ON V.INOUT_CD = VT.C_BASECODE 
-      AND CONVERT(DATE,V.START_DATE) >= dateadd(YY,-1, @indexDate) AND CONVERT(DATE,V.START_DATE) < @indexDate
+      AND V.START_DATE >= dateadd(YY,-@lookbackYears, @indexDate) AND V.START_DATE < @indexDate
       /* RESTRICT LEFT JOIN TO VISIT TYPE ON LAST YEAR OF VISITS FOR NUMERATOR OF THOSE THREE VARIABLES 
          REST OF THE VISITS WILL HAVE NULL AND GET CONVERTED TO 0 IN MAX(CASE STATEMENTS ABOVE 
          SO WE WILL STILL GET RECORDS FROM 2012-2019 WITH 0,0,0 FOR THE THREE FLAGS WE'RE MAKING IF
          THAT PATIENT NEVER HAD A VISIT IN THE YEAR BEFORE THE INDEX DATE */
-WHERE P.BIRTH_DATE IS NOT NULL /* ENSURE BIRTH_DATE IS NOT NULL FOR SUMMARY TABLE ISSUES LATER */
-  --AND EXISTS (SELECT 1 FROM OBSERVATION_FACT WHERE PATIENT_NUM = P.PATIENT_NUM AND CONVERT(DATE,START_DATE) >= '20120101' AND CONCEPT_CD NOT LIKE 'DEM|%') /* AT LEAST ONE NON-DEMOGRAPHIC FACT AFTER 2012 */
-  AND (CONVERT(DATE,V.START_DATE) >= '20120101' AND CONVERT(DATE,V.START_DATE) < @indexDate)
-GROUP BY V.PATIENT_NUM, FLOOR(DATEDIFF(DD,BIRTH_DATE,@indexDate)/365.25)
+GROUP BY V.PATIENT_NUM, V.SEX, V.AGE
 
 SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
 RAISERROR(N'Cohort and Visit Type variables - Rows: %d - Total Execution (ms): %d - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
@@ -138,9 +268,9 @@ FROM #COHORT C,
       , MAX(CASE WHEN P.Feature_name = 'Colonoscopy' THEN 1 ELSE 0 END) AS Colonoscopy
       , MAX(CASE WHEN P.Feature_name = 'PSA Test' THEN 1 ELSE 0 END) AS PSATest
       , MAX(CASE WHEN P.Feature_name = 'A1C' THEN 1 ELSE 0 END) AS A1C
-      from OBSERVATION_FACT o, CTE_PARAMS p
+      from #OBS_FACT o, CTE_PARAMS p
       where o.CONCEPT_CD = p.CONCEPT_CD
-      AND o.START_DATE >=  dateadd(yy,-1, @indexDate)
+      AND o.START_DATE >=  dateadd(yy,-@lookbackYears,@indexDate)
       AND o.START_DATE < @indexDate
       GROUP BY O.PATIENT_NUM, O.PROVIDER_ID /* AGG AT PROVIDER_ID FIRST LEVEL FOR THE MDVisit_pname VARIABLES */
     )PA /* PROVIDER GRAIN AGG->BASELINE -- AGG AT PATIENT_NUM GRAIN */
@@ -203,9 +333,9 @@ WHERE CHARINDEX(':',CONCEPT_CD) > 0
   FROM (
   SELECT O.PATIENT_NUM, P.CATGRY
     , COUNT(DISTINCT CONVERT(DATE,O.START_DATE)) AS CATCNT
-  FROM OBSERVATION_FACT O, CTE_CATGRY p
+  FROM #OBS_FACT O, CTE_CATGRY p
         where o.CONCEPT_CD = P.CONCEPT_CD
-        AND o.START_DATE >=  dateadd(yy,-1, @indexDate)
+        AND o.START_DATE >=  dateadd(yy,-@lookbackYears,@indexDate)
         AND o.START_DATE < @indexDate
   GROUP BY O.PATIENT_NUM, P.CATGRY
   )CA
@@ -249,10 +379,105 @@ WHERE C.PATIENT_NUM = PS.PATIENT_NUM;
 SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
 RAISERROR(N'Predicated Score v2 - Rows: %d - Total Execution (ms): %d  - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
 
+/* Cohort Agegrp - Makes Predictive Score filtering easier in final step if pre-calculated */
+SET @STEPTTS = GETDATE()
+
+SELECT * 
+INTO #cohort_agegrp
+FROM (
+select patient_num
+,sex
+,CAST(case when ISNULL(AGE,0)< 65 then 'Under 65' 
+     when AGE>=65 then 'Over 65' else null end AS VARCHAR(20)) as AGEGRP
+,Num_Dx1              AS Num_Dx1            
+,Num_Dx2              AS Num_Dx2            
+,MedUse1              AS MedUse1            
+,MedUse2              AS MedUse2            
+,Mammography          AS Mammography        
+,PapTest              AS PapTest            
+,PSATest              AS PSATest            
+,Colonoscopy          AS Colonoscopy        
+,FecalOccultTest      AS FecalOccultTest    
+,FluShot              AS FluShot            
+,PneumococcalVaccine  AS PneumococcalVaccine
+,BMI                  AS BMI                
+,A1C                  AS A1C                
+,MedicalExam          AS MedicalExam        
+,INP1_OPT1_Visit      AS INP1_OPT1_Visit    
+,OPT2_Visit           AS OPT2_Visit         
+,ED_Visit             AS ED_Visit           
+,MDVisit_pname2       AS MDVisit_pname2     
+,MDVisit_pname3       AS MDVisit_pname3     
+,Routine_Care_2       AS Routine_Care_2     
+,Predicted_score      AS Predicted_score
+from #cohort
+UNION 
+select patient_num
+,sex
+,'All Patients' AS AGEGRP
+,Num_Dx1              AS Num_Dx1            
+,Num_Dx2              AS Num_Dx2            
+,MedUse1              AS MedUse1            
+,MedUse2              AS MedUse2            
+,Mammography          AS Mammography        
+,PapTest              AS PapTest            
+,PSATest              AS PSATest            
+,Colonoscopy          AS Colonoscopy        
+,FecalOccultTest      AS FecalOccultTest    
+,FluShot              AS FluShot            
+,PneumococcalVaccine  AS PneumococcalVaccine
+,BMI                  AS BMI                
+,A1C                  AS A1C                
+,MedicalExam          AS MedicalExam        
+,INP1_OPT1_Visit      AS INP1_OPT1_Visit    
+,OPT2_Visit           AS OPT2_Visit         
+,ED_Visit             AS ED_Visit           
+,MDVisit_pname2       AS MDVisit_pname2     
+,MDVisit_pname3       AS MDVisit_pname3     
+,Routine_Care_2       AS Routine_Care_2     
+,Predicted_score      AS Predicted_score
+from #cohort
+)cag;
+
+SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
+RAISERROR(N'Prepare #cohort_agegrp - Rows: %d - Total Execution (ms): %d  - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
+
+/* Calculate Predictive Score Cutoff by over Agegroups */
+SET @STEPTTS = GETDATE()
+
+SELECT AGEGRP, MIN(PREDICTED_SCORE) PredictiveScoreCutoff
+INTO #AGEGRP_PSC
+FROM (
+SELECT AGEGRP, Predicted_score, NTILE(5) OVER (PARTITION BY AGEGRP ORDER BY PREDICTED_SCORE DESC) AS ScoreRank
+FROM(
+SELECT AGEGRP, predicted_score
+from #cohort_agegrp
+)SCORES
+)M
+WHERE ScoreRank=1
+GROUP BY AGEGRP
+
+SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
+RAISERROR(N'Prepare #AGEGRP_PSC - Rows: %d - Total Execution (ms): %d  - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
+
 /* OPTIONAL CHARLSON COMORBIDITY INDEX -- ADDS APPROX. 1m in UKY environment. 
    REQUIRES SITE TO LOAD LU_CHARLSON FROM REPO 
 */
 SET @STEPTTS = GETDATE()
+
+SELECT DISTINCT CHARLSON_CATGRY, CHARLSON_WT, C_BASECODE AS CONCEPT_CD
+INTO #CHARLSON_DX
+FROM (
+SELECT C.CHARLSON_CATGRY, C.CHARLSON_WT, DX10.C_BASECODE
+FROM LU_CHARLSON C
+  JOIN ACT_ICD10CM_DX_V4 DX10
+    ON DX10.C_BASECODE LIKE C.DIAGPATTERN
+UNION ALL
+SELECT C.CHARLSON_CATGRY, C.CHARLSON_WT, DX9.C_BASECODE
+FROM LU_CHARLSON C
+  JOIN ACT_ICD9CM_DX_V4 DX9
+    ON DX9.C_BASECODE LIKE C.DIAGPATTERN
+)C
 
 ;WITH CTE_VISIT_BASE AS (
 SELECT PATIENT_NUM, AGE, LAST_DATE
@@ -262,17 +487,16 @@ SELECT PATIENT_NUM, AGE, LAST_DATE
           WHEN AGE >= 70 THEN 3 END AS CHARLSON_AGE_BASE
 FROM (
 SELECT V.PATIENT_NUM
-  , FLOOR(DATEDIFF(DD,P.BIRTH_DATE,@indexDate)/365.25) AS AGE
-  , MAX(CONVERT(DATE,V.START_DATE)) LAST_DATE
-FROM DBO.VISIT_DIMENSION V 
-  JOIN DBO.PATIENT_DIMENSION P
-    ON V.PATIENT_NUM = P.PATIENT_NUM
-WHERE CONVERT(DATE,V.START_DATE) >= DATEADD(MM,-12,@indexDate) AND CONVERT(DATE,V.START_DATE) < @indexDate
-  AND P.BIRTH_DATE IS NOT NULL
-  AND EXISTS (SELECT 1 FROM OBSERVATION_FACT WHERE PATIENT_NUM = P.PATIENT_NUM AND CONVERT(DATE,START_DATE) > '20120101' AND CONCEPT_CD NOT LIKE 'DEM|%')
-GROUP BY V.PATIENT_NUM, FLOOR(DATEDIFF(DD,P.BIRTH_DATE,@indexDate)/365.25)
+  , V.AGE
+  , MAX(V.START_DATE) LAST_DATE
+FROM #VISIT_DIM V 
+GROUP BY V.PATIENT_NUM, V.AGE
 ) VISITS
 )
+SELECT PATIENT_NUM, AGE, LAST_DATE, CHARLSON_AGE_BASE
+INTO #CHARLSON_VISIT_BASE
+FROM CTE_VISIT_BASE
+
 SELECT PATIENT_NUM
   , LAST_DATE
   , AGE
@@ -313,18 +537,20 @@ SELECT PATIENT_NUM, AGE, LAST_DATE, CHARLSON_AGE_BASE
   , MAX(CASE WHEN CHARLSON_CATGRY = 'AIDSHIV'       THEN CHARLSON_WT ELSE 0 END) AS AIDSHIV
 FROM (
   /* FOR EACH VISIT - PULL PREVIOUS YEAR OF DIAGNOSIS FACTS JOINED TO CHARLSON CATEGORIES - EXTRACTING CHARLSON CATGRY/WT */
-  SELECT V.PATIENT_NUM, V.AGE, V.LAST_DATE, V.CHARLSON_AGE_BASE, C.CHARLSON_CATGRY, C.CHARLSON_WT
-  FROM CTE_VISIT_BASE V
-    JOIN OBSERVATION_FACT F
-      ON V.PATIENT_NUM = F.PATIENT_NUM
-      AND F.START_DATE BETWEEN DATEADD(YY,-1,V.LAST_DATE) AND V.LAST_DATE
-    JOIN LU_CHARLSON C
-      ON F.CONCEPT_CD LIKE DIAGPATTERN
-  GROUP BY V.PATIENT_NUM, V.AGE, V.LAST_DATE, CHARLSON_AGE_BASE, C.CHARLSON_CATGRY, C.CHARLSON_WT
+  SELECT O.PATIENT_NUM, O.AGE, O.LAST_DATE, O.CHARLSON_AGE_BASE, C.CHARLSON_CATGRY, C.CHARLSON_WT
+  FROM (SELECT DISTINCT F.PATIENT_NUM, CONCEPT_CD, V.AGE, V.LAST_DATE, V.CHARLSON_AGE_BASE 
+        FROM #OBS_FACT F 
+          JOIN #CHARLSON_VISIT_BASE V 
+            ON F.PATIENT_NUM = V.PATIENT_NUM
+            AND F.START_DATE BETWEEN DATEADD(YY,-1,V.LAST_DATE) AND V.LAST_DATE
+       )O
+    JOIN #CHARLSON_DX C
+      ON O.CONCEPT_CD = C.CONCEPT_CD
+  GROUP BY O.PATIENT_NUM, O.AGE, O.LAST_DATE, O.CHARLSON_AGE_BASE, C.CHARLSON_CATGRY, C.CHARLSON_WT
   UNION /* IF NO CHARLSON DX FOUND IN ABOVE INNER JOINS WE CAN UNION TO JUST THE ENCOUNTER+AGE_BASE RECORD WITH CHARLSON FIELDS NULLED OUT
            THIS IS MORE PERFORMANT (SHORTCUT) THAN A LEFT JOIN IN THE OBSERVATION-CHARLSON JOIN ABOVE */
   SELECT V2.PATIENT_NUM, V2.AGE, V2.LAST_DATE, V2.CHARLSON_AGE_BASE, NULL, NULL
-  FROM CTE_VISIT_BASE V2
+  FROM #CHARLSON_VISIT_BASE V2
   )DXU
   GROUP BY PATIENT_NUM, AGE, LAST_DATE, CHARLSON_AGE_BASE
 )cci
@@ -336,6 +562,7 @@ RAISERROR(N'Charlson Index and weighted flags - Rows: %d - Total Execution (ms):
 /* CHARLSON 10YR PROB MEDIAN/MEAN/MODE/STDEV */
 SET @STEPTTS = GETDATE()
 
+/* UNFILTERED BY PSC */
 ;WITH CTE_MODE AS (
 SELECT ISNULL(A.AGEGRP,'All Patients') AGEGRP
   , CHARLSON_10YR_SURVIVAL_PROB
@@ -357,6 +584,7 @@ GROUP BY GROUPING SETS ((AGEGRP),())
 )GS
 )
 SELECT MS.AGEGRP
+  , CAST('N' AS CHAR(1)) CUTOFF_FILTER_YN
   , MEDIAN_10YR_SURVIVAL
   , S.MEAN_10YRPROB
   , S.STDEV_10YRPROB
@@ -376,95 +604,82 @@ WHERE AGEGRP != '-'
 WHERE MS.AGEGRP = S.AGEGRP
 GROUP BY MS.AGEGRP, MEDIAN_10YR_SURVIVAL, S.MODE_10YRPROB, S.STDEV_10YRPROB, S.MEAN_10YRPROB
 
+/* FILTERED BY PSC */
+;WITH CTE_MODE AS (
+SELECT --ISNULL(A.AGEGRP,'All Patients') AGEGRP
+    AGEGRP
+  , CHARLSON_10YR_SURVIVAL_PROB
+  , RANK() OVER (PARTITION BY ISNULL(A.AGEGRP,'All Patients') ORDER BY N DESC) MR_AG
+FROM (
+SELECT C.AGEGRP, CHARLSON_10YR_SURVIVAL_PROB, COUNT(*) N
+FROM #COHORT_CHARLSON CC
+  JOIN #cohort_agegrp C
+    ON CC.PATIENT_NUM = C.patient_num
+  JOIN #AGEGRP_PSC PSC
+    ON C.AGEGRP = PSC.AGEGRP
+    AND C.Predicted_score >= PSC.PredictiveScoreCutoff
+GROUP BY C.AGEGRP,CHARLSON_10YR_SURVIVAL_PROB
+)A
+GROUP BY AGEGRP, CHARLSON_10YR_SURVIVAL_PROB, N
+)
+, CTE_MEAN_STDEV_MODE AS (
+SELECT AGEGRP, MEAN_10YRPROB, STDEV_10YRPROB
+  , (SELECT CHARLSON_10YR_SURVIVAL_PROB FROM CTE_MODE WHERE AGEGRP = ISNULL(GS.AGEGRP,'All Patients') AND (MR_AG = 1)) AS MODE_10YRPROB
+FROM (
+SELECT C.AGEGRP, AVG(CHARLSON_10YR_SURVIVAL_PROB) MEAN_10YRPROB, STDEV(CHARLSON_10YR_SURVIVAL_PROB) STDEV_10YRPROB
+FROM #COHORT_CHARLSON CC
+  JOIN #cohort_agegrp C
+    ON CC.PATIENT_NUM = C.patient_num
+  JOIN #AGEGRP_PSC PSC
+    ON C.AGEGRP = PSC.AGEGRP
+    AND C.Predicted_score >= PSC.PredictiveScoreCutoff
+GROUP BY C.AGEGRP
+)GS
+)
+INSERT INTO #CHARLSON_STATS(AGEGRP,CUTOFF_FILTER_YN,MEDIAN_10YR_SURVIVAL,MEAN_10YRPROB,STDEV_10YRPROB,MODE_10YRPROB)
+SELECT MS.AGEGRP
+  , CAST('Y' AS CHAR(1)) AS CUTOFF_FILTER_YN
+  , MEDIAN_10YR_SURVIVAL
+  , S.MEAN_10YRPROB
+  , S.STDEV_10YRPROB
+  , S.MODE_10YRPROB
+FROM (
+SELECT C.AGEGRP, CHARLSON_10YR_SURVIVAL_PROB
+  , PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY CHARLSON_10YR_SURVIVAL_PROB) OVER (PARTITION BY C.AGEGRP) AS MEDIAN_10YR_SURVIVAL
+FROM #COHORT_CHARLSON CC
+  JOIN #cohort_agegrp C
+    ON CC.PATIENT_NUM = C.patient_num
+  JOIN #AGEGRP_PSC PSC
+    ON C.AGEGRP = PSC.AGEGRP
+    AND C.Predicted_score >= PSC.PredictiveScoreCutoff
+WHERE CC.AGEGRP != '-'
+)MS, CTE_MEAN_STDEV_MODE S
+WHERE MS.AGEGRP = S.AGEGRP
+GROUP BY MS.AGEGRP, MEDIAN_10YR_SURVIVAL, S.MODE_10YRPROB, S.STDEV_10YRPROB, S.MEAN_10YRPROB
+
+
 SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
 RAISERROR(N'Charlson Stats - Rows: %d - Total Execution (ms): %d  - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
 
-/* Cohort Agegrp - Makes Predictive Score filtering easier in final step if pre-calculated */
-SET @STEPTTS = GETDATE()
-
-SELECT * 
-INTO #cohort_agegrp
-FROM (
-select patient_num
-,CAST(case when ISNULL(AGE,0)< 65 then 'Under 65' 
-     when AGE>=65 then 'Over 65' else null end AS VARCHAR(20)) as AGEGRP
-,Num_Dx1              AS Num_Dx1            
-,Num_Dx2              AS Num_Dx2            
-,MedUse1              AS MedUse1            
-,MedUse2              AS MedUse2            
-,Mammography          AS Mammography        
-,PapTest              AS PapTest            
-,PSATest              AS PSATest            
-,Colonoscopy          AS Colonoscopy        
-,FecalOccultTest      AS FecalOccultTest    
-,FluShot              AS FluShot            
-,PneumococcalVaccine  AS PneumococcalVaccine
-,BMI                  AS BMI                
-,A1C                  AS A1C                
-,MedicalExam          AS MedicalExam        
-,INP1_OPT1_Visit      AS INP1_OPT1_Visit    
-,OPT2_Visit           AS OPT2_Visit         
-,ED_Visit             AS ED_Visit           
-,MDVisit_pname2       AS MDVisit_pname2     
-,MDVisit_pname3       AS MDVisit_pname3     
-,Routine_Care_2       AS Routine_Care_2     
-,Predicted_score      AS Predicted_score
-from #cohort
-UNION 
-select patient_num
-,'All Patients' AS AGEGRP
-,Num_Dx1              AS Num_Dx1            
-,Num_Dx2              AS Num_Dx2            
-,MedUse1              AS MedUse1            
-,MedUse2              AS MedUse2            
-,Mammography          AS Mammography        
-,PapTest              AS PapTest            
-,PSATest              AS PSATest            
-,Colonoscopy          AS Colonoscopy        
-,FecalOccultTest      AS FecalOccultTest    
-,FluShot              AS FluShot            
-,PneumococcalVaccine  AS PneumococcalVaccine
-,BMI                  AS BMI                
-,A1C                  AS A1C                
-,MedicalExam          AS MedicalExam        
-,INP1_OPT1_Visit      AS INP1_OPT1_Visit    
-,OPT2_Visit           AS OPT2_Visit         
-,ED_Visit             AS ED_Visit           
-,MDVisit_pname2       AS MDVisit_pname2     
-,MDVisit_pname3       AS MDVisit_pname3     
-,Routine_Care_2       AS Routine_Care_2     
-,Predicted_score      AS Predicted_score
-from #cohort
-)cag;
-
-SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
-RAISERROR(N'Prepare #cohort_agegrp - Rows: %d - Total Execution (ms): %d  - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
-
+/* FINAL SUMMARIZATION OF RESULTS */
+/* clear out last run of lookback */
+DELETE FROM dbo.loyalty_dev_summary WHERE LOOKBACK_YR = @lookbackYears AND GENDER_DENOMINATORS_YN = IIF(@gendered=0,'N','Y') and [SITE]=@site
 
 /* FINAL SUMMARIZATION OF RESULTS */
 SET @STEPTTS = GETDATE()
 
-;WITH CTE_PREDICTIVE AS (
-SELECT AGEGRP, MIN(PREDICTED_SCORE) PredictiveScoreCutoff
-FROM (
-SELECT AGEGRP, Predicted_score, NTILE(5) OVER (PARTITION BY AGEGRP ORDER BY PREDICTED_SCORE DESC) AS ScoreRank
-FROM(
---SELECT CAST(case when ISNULL(AGE,0)< 65 then 'Under 65' 
---     when AGE>=65           then 'Over 65' else null end AS VARCHAR(20)) as AGEGRP,
-SELECT AGEGRP, predicted_score
-from #cohort_agegrp
---UNION ALL
---SELECT 'All Patients' as AGEGRP, predicted_score
---from #cohort
-)SCORES
-)M
-WHERE ScoreRank=1
-GROUP BY AGEGRP
-)
-SELECT CUTOFF_FILTER_YN, Summary_Description, COHORTAGG.AGEGRP as tablename, TotalSubjects, Num_DX1, Num_DX2, MedUSe1, MedUse2, Mammography, PapTest, PSATest, Colonoscopy, FecalOccultTest
-  , FluShot, PneumococcalVaccine, BMI, A1C, MedicalExam, INP1_OPT1_Visit, OPT2_Visit, ED_Visit, MDVisit_pname2, MDVisit_pname3, Routine_care_2, Subjects_NoCriteria, CP.PredictiveScoreCutoff
-  , CS.MEAN_10YRPROB, CS.MEDIAN_10YR_SURVIVAL, CS.MODE_10YRPROB, CS.STDEV_10YRPROB
-INTO DBO.loyalty_dev_summary
+INSERT INTO dbo.loyalty_dev_summary ([SITE], [LOOKBACK_YR], GENDER_DENOMINATORS_YN, [CUTOFF_FILTER_YN], [Summary_Description], [tablename], [Num_DX1], [Num_DX2], [MedUse1], [MedUse2]
+, [Mammography], [PapTest], [PSATest], [Colonoscopy], [FecalOccultTest], [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit]
+, [MDVisit_pname2], [MDVisit_pname3], [Routine_care_2], [Subjects_NoCriteria], [PredictiveScoreCutoff]
+, [MEAN_10YRPROB], [MEDIAN_10YR_SURVIVAL], [MODE_10YRPROB], [STDEV_10YRPROB], [TotalSubjects]
+, TotalSubjectsFemale, TotalSubjectsMale)
+SELECT @site, @lookbackYears, IIF(@gendered=0,'N','Y') as GENDER_DENOMINATORS_YN, COHORTAGG.CUTOFF_FILTER_YN, Summary_Description, COHORTAGG.AGEGRP as tablename, Num_DX1, Num_DX2, MedUse1, MedUse2
+  , Mammography, PapTest, PSATest, Colonoscopy, FecalOccultTest, FluShot, PneumococcalVaccine, BMI, A1C, MedicalExam, INP1_OPT1_Visit, OPT2_Visit, ED_Visit
+  , MDVisit_pname2, MDVisit_pname3, Routine_care_2, Subjects_NoCriteria
+  , CASE WHEN COHORTAGG.CUTOFF_FILTER_YN = 'Y' THEN CP.PredictiveScoreCutoff ELSE NULL END AS PredictiveScoreCutoff
+  , CS.MEAN_10YRPROB, CS.MEDIAN_10YR_SURVIVAL, CS.MODE_10YRPROB, CS.STDEV_10YRPROB, TotalSubjects
+  , TotalSubjectsFemale
+  , TotalSubjectsMale
 FROM (
 /* FILTERED BY PREDICTIVE CUTOFF */
 SELECT
@@ -474,11 +689,11 @@ CAG.AGEGRP,
 count(distinct patient_num) as TotalSubjects,
 sum(cast([Num_Dx1] as int)) as Num_DX1,
 sum(cast([Num_Dx2] as int)) as Num_DX2,
-sum(cast([MedUse1] as int))  as MedUSe1,
+sum(cast([MedUse1] as int))  as MedUse1,
 sum(cast([MedUse2] as int)) as MedUse2,
-sum(cast([Mammography] as int)) as Mammography,
-sum(cast([PapTest] as int)) as PapTest,
-sum(cast([PSATest] as int)) as PSATest,
+sum(cast(IIF(@gendered=0,[Mammography],IIF(SEX='F',[Mammography],NULL)) as int)) as Mammography,
+sum(cast(IIF(@gendered=0,[PapTest]    ,IIF(SEX='F',[PapTest]    ,NULL)) as int)) as PapTest,
+sum(cast(IIF(@gendered=0,[PSATest]    ,IIF(SEX='M',[PSATest]    ,NULL)) as int)) as PSATest,
 sum(cast([Colonoscopy] as int)) as Colonoscopy,
 sum(cast([FecalOccultTest] as int)) as FecalOccultTest,
 sum(cast([FluShot] as int)) as  FluShot,
@@ -493,8 +708,10 @@ sum(cast([MDVisit_pname2] as int)) as MDVisit_pname2,
 sum(cast([MDVisit_pname3] as int)) as MDVisit_pname3,
 sum(cast([Routine_Care_2] as int)) as Routine_care_2,
 SUM(CAST(~(Num_Dx1|Num_Dx2|MedUse1|Mammography|PapTest|PSATest|Colonoscopy|FecalOccultTest|FluShot|PneumococcalVaccine|BMI|
-  A1C|MedicalExam|INP1_OPT1_Visit|OPT2_Visit|ED_Visit|MDVisit_pname2|MDVisit_pname3|Routine_Care_2) AS INT)) as Subjects_NoCriteria /* inverted bitwise OR of all bit flags */
-from #cohort_agegrp CAG JOIN CTE_PREDICTIVE P ON CAG.AGEGRP = P.AGEGRP AND CAG.Predicted_score >= P.PredictiveScoreCutoff
+  A1C|MedicalExam|INP1_OPT1_Visit|OPT2_Visit|ED_Visit|MDVisit_pname2|MDVisit_pname3|Routine_Care_2) AS INT)) as Subjects_NoCriteria, /* inverted bitwise OR of all bit flags */
+count(distinct IIF(SEX='F',patient_num,NULL)) AS TotalSubjectsFemale,
+count(distinct IIF(SEX='M',patient_num,NULL)) AS TotalSubjectsMale
+from #cohort_agegrp CAG JOIN #AGEGRP_PSC P ON CAG.AGEGRP = P.AGEGRP AND CAG.Predicted_score >= P.PredictiveScoreCutoff
 group by CAG.AGEGRP
 UNION ALL
 SELECT
@@ -504,11 +721,11 @@ CAG.AGEGRP,
 count(distinct patient_num) as TotalSubjects,
 100*avg(cast([Num_Dx1] as numeric(2,1))) as Num_DX1,
 100*avg(cast([Num_Dx2] as numeric(2,1))) as Num_DX2,
-100*avg(cast([MedUse1] as numeric(2,1)))  as MedUSe1,
+100*avg(cast([MedUse1] as numeric(2,1)))  as MedUse1,
 100*avg(cast([MedUse2] as numeric(2,1))) as MedUse2,
-100*avg(cast([Mammography] as numeric(2,1))) as Mammography,
-100*avg(cast([PapTest] as numeric(2,1))) as PapTest,
-100*avg(cast([PSATest] as numeric(2,1))) as PSATest,
+100*avg(cast(IIF(@gendered=0,[Mammography],IIF(SEX='F',[Mammography],NULL)) AS numeric(2,1))) as Mammography,
+100*avg(cast(IIF(@gendered=0,[PapTest]    ,IIF(SEX='F',[PapTest]    ,NULL)) AS numeric(2,1))) as PapTest,
+100*avg(cast(IIF(@gendered=0,[PSATest]    ,IIF(SEX='M',[PSATest]    ,NULL)) AS numeric(2,1))) as PSATest,
 100*avg(cast([Colonoscopy] as numeric(2,1))) as Colonoscopy,
 100*avg(cast([FecalOccultTest] as numeric(2,1))) as FecalOccultTest,
 100*avg(cast([FluShot] as numeric(2,1))) as  FluShot,
@@ -523,11 +740,13 @@ count(distinct patient_num) as TotalSubjects,
 100*avg(cast([MDVisit_pname3] as numeric(2,1))) as MDVisit_pname3,
 100*avg(cast([Routine_Care_2] as numeric(2,1))) as Routine_care_2,
 100*AVG(CAST(~(Num_Dx1|Num_Dx2|MedUse1|Mammography|PapTest|PSATest|Colonoscopy|FecalOccultTest|FluShot|PneumococcalVaccine|BMI|
-  A1C|MedicalExam|INP1_OPT1_Visit|OPT2_Visit|ED_Visit|MDVisit_pname2|MDVisit_pname3|Routine_Care_2) AS NUMERIC(2,1))) as Subjects_NoCriteria /* inverted bitwise OR of all bit flags */
-from #cohort_agegrp CAG JOIN CTE_PREDICTIVE P ON CAG.AGEGRP = P.AGEGRP AND CAG.Predicted_score >= P.PredictiveScoreCutoff
+  A1C|MedicalExam|INP1_OPT1_Visit|OPT2_Visit|ED_Visit|MDVisit_pname2|MDVisit_pname3|Routine_Care_2) AS NUMERIC(2,1))) as Subjects_NoCriteria, /* inverted bitwise OR of all bit flags */
+count(distinct IIF(SEX='F',patient_num,NULL)) AS TotalSubjectsFemale,
+count(distinct IIF(SEX='M',patient_num,NULL)) AS TotalSubjectsMale
+from #cohort_agegrp CAG JOIN #AGEGRP_PSC P ON CAG.AGEGRP = P.AGEGRP AND CAG.Predicted_score >= P.PredictiveScoreCutoff
 group by CAG.AGEGRP
 UNION ALL
-/* UNFILTERED */
+/* UNFILTERED -- ALL QUINTILES */
 SELECT
 'N' AS CUTOFF_FILTER_YN,
 'Patient Counts' as Summary_Description,
@@ -535,11 +754,11 @@ CAG.AGEGRP,
 count(distinct patient_num) as TotalSubjects,
 sum(cast([Num_Dx1] as int)) as Num_DX1,
 sum(cast([Num_Dx2] as int)) as Num_DX2,
-sum(cast([MedUse1] as int))  as MedUSe1,
+sum(cast([MedUse1] as int))  as MedUse1,
 sum(cast([MedUse2] as int)) as MedUse2,
-sum(cast([Mammography] as int)) as Mammography,
-sum(cast([PapTest] as int)) as PapTest,
-sum(cast([PSATest] as int)) as PSATest,
+sum(cast(IIF(@gendered=0,[Mammography],IIF(SEX='F',[Mammography],NULL)) as int)) as Mammography,
+sum(cast(IIF(@gendered=0,[PapTest]    ,IIF(SEX='F',[PapTest]    ,NULL)) as int)) as PapTest,
+sum(cast(IIF(@gendered=0,[PSATest]    ,IIF(SEX='M',[PSATest]    ,NULL)) as int)) as PSATest,
 sum(cast([Colonoscopy] as int)) as Colonoscopy,
 sum(cast([FecalOccultTest] as int)) as FecalOccultTest,
 sum(cast([FluShot] as int)) as  FluShot,
@@ -554,8 +773,10 @@ sum(cast([MDVisit_pname2] as int)) as MDVisit_pname2,
 sum(cast([MDVisit_pname3] as int)) as MDVisit_pname3,
 sum(cast([Routine_Care_2] as int)) as Routine_care_2,
 SUM(CAST(~(Num_Dx1|Num_Dx2|MedUse1|Mammography|PapTest|PSATest|Colonoscopy|FecalOccultTest|FluShot|PneumococcalVaccine|BMI|
-  A1C|MedicalExam|INP1_OPT1_Visit|OPT2_Visit|ED_Visit|MDVisit_pname2|MDVisit_pname3|Routine_Care_2) AS INT)) as Subjects_NoCriteria /* inverted bitwise OR of all bit flags */
-from #cohort_agegrp CAG JOIN CTE_PREDICTIVE P ON CAG.AGEGRP = P.AGEGRP AND CAG.Predicted_score >= P.PredictiveScoreCutoff
+  A1C|MedicalExam|INP1_OPT1_Visit|OPT2_Visit|ED_Visit|MDVisit_pname2|MDVisit_pname3|Routine_Care_2) AS INT)) as Subjects_NoCriteria, /* inverted bitwise OR of all bit flags */
+count(distinct IIF(SEX='F',patient_num,NULL)) AS TotalSubjectsFemale,
+count(distinct IIF(SEX='M',patient_num,NULL)) AS TotalSubjectsMale
+from #cohort_agegrp CAG
 group by CAG.AGEGRP
 UNION ALL
 SELECT
@@ -565,11 +786,11 @@ CAG.AGEGRP,
 count(distinct patient_num) as TotalSubjects,
 100*avg(cast([Num_Dx1] as numeric(2,1))) as Num_DX1,
 100*avg(cast([Num_Dx2] as numeric(2,1))) as Num_DX2,
-100*avg(cast([MedUse1] as numeric(2,1)))  as MedUSe1,
+100*avg(cast([MedUse1] as numeric(2,1)))  as MedUse1,
 100*avg(cast([MedUse2] as numeric(2,1))) as MedUse2,
-100*avg(cast([Mammography] as numeric(2,1))) as Mammography,
-100*avg(cast([PapTest] as numeric(2,1))) as PapTest,
-100*avg(cast([PSATest] as numeric(2,1))) as PSATest,
+100*avg(cast(IIF(@gendered=0,[Mammography],IIF(SEX='F',[Mammography],NULL)) AS numeric(2,1))) as Mammography,
+100*avg(cast(IIF(@gendered=0,[PapTest]    ,IIF(SEX='F',[PapTest]    ,NULL)) AS numeric(2,1))) as PapTest,
+100*avg(cast(IIF(@gendered=0,[PSATest]    ,IIF(SEX='M',[PSATest]    ,NULL)) AS numeric(2,1))) as PSATest,
 100*avg(cast([Colonoscopy] as numeric(2,1))) as Colonoscopy,
 100*avg(cast([FecalOccultTest] as numeric(2,1))) as FecalOccultTest,
 100*avg(cast([FluShot] as numeric(2,1))) as  FluShot,
@@ -584,20 +805,46 @@ count(distinct patient_num) as TotalSubjects,
 100*avg(cast([MDVisit_pname3] as numeric(2,1))) as MDVisit_pname3,
 100*avg(cast([Routine_Care_2] as numeric(2,1))) as Routine_care_2,
 100*AVG(CAST(~(Num_Dx1|Num_Dx2|MedUse1|Mammography|PapTest|PSATest|Colonoscopy|FecalOccultTest|FluShot|PneumococcalVaccine|BMI|
-  A1C|MedicalExam|INP1_OPT1_Visit|OPT2_Visit|ED_Visit|MDVisit_pname2|MDVisit_pname3|Routine_Care_2) AS NUMERIC(2,1))) as Subjects_NoCriteria /* inverted bitwise OR of all bit flags */
+  A1C|MedicalExam|INP1_OPT1_Visit|OPT2_Visit|ED_Visit|MDVisit_pname2|MDVisit_pname3|Routine_Care_2) AS NUMERIC(2,1))) as Subjects_NoCriteria, /* inverted bitwise OR of all bit flags */
+count(distinct IIF(SEX='F',patient_num,NULL)) AS TotalSubjectsFemale,
+count(distinct IIF(SEX='M',patient_num,NULL)) AS TotalSubjectsMale
 from #cohort_agegrp CAG
-group by CAG.AGEGRP
+group by CAG.AGEGRP 
 )COHORTAGG
-  JOIN CTE_PREDICTIVE CP
-    ON ISNULL(COHORTAGG.AGEGRP,'All Patients') = CP.AGEGRP
+  JOIN #AGEGRP_PSC CP
+    ON COHORTAGG.AGEGRP = CP.AGEGRP
   JOIN #CHARLSON_STATS CS
-    ON ISNULL(COHORTAGG.AGEGRP,'All Patients') = CS.AGEGRP
-
--- jgk 8/4/21: Expose the cohort table for analytics. Keep in mind it is fairly large. 
-
-select * into DBO.loyalty_dev from #cohort_agegrp
+    ON COHORTAGG.AGEGRP = CS.AGEGRP
+      AND COHORTAGG.CUTOFF_FILTER_YN = CS.CUTOFF_FILTER_YN
 
 SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
 RAISERROR(N'Final Summary Table - Rows: %d - Total Execution (ms): %d - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
 
-SELECT * FROM DBO.loyalty_dev_summary WHERE Summary_Description = 'PercentOfSubjects' ORDER BY TABLENAME;
+UPDATE [dbo].[loyalty_dev_summary]
+SET RUNTIMEms = @ENDRUNTIMEms
+WHERE LOOKBACK_YR = @lookbackYears
+
+-- jgk 8/4/21: Expose the cohort table for analytics. Keep in mind it is fairly large. 
+
+SET @STEPTTS = GETDATE()
+
+IF OBJECT_ID(N'DBO.loyalty_dev', N'U') IS NOT NULL DROP TABLE DBO.loyalty_dev;
+select * into DBO.loyalty_dev from #cohort_agegrp;
+
+SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
+RAISERROR(N'Final Summary Table - Rows: %d - Total Execution (ms): %d - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
+
+/* FINAL OUTPUT FOR SHARED SPREADSHEET */
+if(@output=1) /* Only if Output parameter was passed */
+  SELECT [SITE], [EXTRACT_DTTM], [LOOKBACK_YR], GENDER_DENOMINATORS_YN, [CUTOFF_FILTER_YN], [Summary_Description], [tablename], [Num_DX1], [Num_DX2], [MedUse1], [MedUse2]
+  , [Mammography], [PapTest], [PSATest], [Colonoscopy], [FecalOccultTest], [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit]
+  , [MDVisit_pname2], [MDVisit_pname3], [Routine_care_2], [Subjects_NoCriteria], [PredictiveScoreCutoff]
+  , [MEAN_10YRPROB], [MEDIAN_10YR_SURVIVAL], [MODE_10YRPROB], [STDEV_10YRPROB]
+  , [TotalSubjects], [TotalSubjectsFemale], [TotalSubjectsMale]
+  , FORMAT(1.0*[TotalSubjectsFemale]/[TotalSubjects],'P') AS PercentFemale
+  , FORMAT(1.0*[TotalSubjectsMale]/[TotalSubjects],'P') AS PercentMale
+  , [RUNTIMEms]
+  FROM [dbo].[loyalty_dev_summary] 
+  WHERE Summary_Description = 'PercentOfSubjects' 
+    AND LOOKBACK_YR = @lookbackYears
+  ORDER BY LOOKBACK_YR, CUTOFF_FILTER_YN, TABLENAME;

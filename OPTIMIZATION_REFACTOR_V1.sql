@@ -126,8 +126,8 @@ FROM #COHORT C,
     , MAX(PSATest) as PSATest, MAX(A1C) as A1C
     FROM (
       SELECT O.PATIENT_NUM
-      , CASE WHEN COUNT(DISTINCT CASE WHEN P.code_type = 'PX' AND (O.PROVIDER_ID is not null and O.provider_id <> '' and O.provider_id <> '@') THEN CONVERT(DATE,O.START_DATE) ELSE NULL END)  = 2 THEN 1 ELSE 0 END AS MDVisit_pname2
-      , CASE WHEN COUNT(DISTINCT CASE WHEN P.code_type = 'PX' AND (O.PROVIDER_ID is not null and O.provider_id <> '' and O.provider_id <> '@') THEN CONVERT(DATE,O.START_DATE) ELSE NULL END)  > 2 THEN 1 ELSE 0 END AS MDVisit_pname3
+      , CASE WHEN COUNT(DISTINCT CASE WHEN P.Feature_name = 'MD visit' THEN CONVERT(DATE,O.START_DATE) ELSE NULL END)  = 2 THEN 1 ELSE 0 END AS MDVisit_pname2
+      , CASE WHEN COUNT(DISTINCT CASE WHEN P.Feature_name = 'MD visit' THEN CONVERT(DATE,O.START_DATE) ELSE NULL END)  > 2 THEN 1 ELSE 0 END AS MDVisit_pname3
       , MAX(CASE WHEN P.Feature_name = 'Mammography' THEN 1 ELSE 0 END) AS Mammography
       , MAX(CASE WHEN P.Feature_name = 'BMI' THEN 1 ELSE 0 END) AS BMI
       , MAX(CASE WHEN P.Feature_name = 'Flu Shot' THEN 1 ELSE 0 END) AS FluShot
@@ -593,7 +593,8 @@ group by CAG.AGEGRP
   JOIN #CHARLSON_STATS CS
     ON ISNULL(COHORTAGG.AGEGRP,'All Patients') = CS.AGEGRP
 
--- jgk 8/4/21: Expose the cohort table for analytics. Keep in mind it is fairly large.  
+-- jgk 8/4/21: Expose the cohort table for analytics. Keep in mind it is fairly large. 
+
 select * into DBO.loyalty_dev from #cohort_agegrp
 
 SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())

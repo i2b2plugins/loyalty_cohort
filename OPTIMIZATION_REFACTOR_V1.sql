@@ -1,13 +1,13 @@
---IF OBJECT_ID(N'DBO.usp_LoyaltyCohort_opt') IS NOT NULL DROP PROCEDURE DBO.usp_LoyaltyCohort_opt
---GO
+IF OBJECT_ID(N'DBO.usp_LoyaltyCohort_opt') IS NOT NULL DROP PROCEDURE DBO.usp_LoyaltyCohort_opt
+GO
 
---CREATE PROC DBO.usp_LoyaltyCohort_opt
---     @indexDate datetime
---    ,@site varchar(10) 
---    ,@lookbackYears int = 1 /* DEFAULT TO 1 YEAR */
---    ,@gendered bit = 0 /* DEFAULT TO NON GENDER VERSION */
---    ,@output bit = 1 /* DEFAULT TO SHOW FINAL OUTPUT */
---AS
+CREATE PROC DBO.usp_LoyaltyCohort_opt
+     @indexDate datetime
+    ,@site varchar(10) 
+    ,@lookbackYears int = 1 /* DEFAULT TO 1 YEAR */
+    ,@gendered bit = 0 /* DEFAULT TO NON GENDER VERSION */
+    ,@output bit = 1 /* DEFAULT TO SHOW FINAL OUTPUT */
+AS
 
 /* 
    CHECK ANY CUSTOM LOCAL CODES ADDED TO xref_LoyaltyCode_paths AT <PE.1> AND <PE.2> - PLEASE SEE COMMENTS
@@ -17,11 +17,11 @@ SET NOCOUNT ON
 SET XACT_ABORT ON
 
 /* UNCOMMENT IF TESTING PROC BODY ALONE */
-DECLARE @indexDate DATE='20210201'
-DECLARE @site VARCHAR(10) = '' /* ALTER TO YOUR DESIRED SITE CODE */
-DECLARE @lookbackYears INT = 1
-DECLARE @gendered BIT = 0
-DECLARE @output BIT = 1
+--DECLARE @indexDate DATE='20210201'
+--DECLARE @site VARCHAR(10) = '' /* ALTER TO YOUR DESIRED SITE CODE */
+--DECLARE @lookbackYears INT = 1
+--DECLARE @gendered BIT = 0
+--DECLARE @output BIT = 1
 
 /* create the target summary table if not exists */
 IF OBJECT_ID(N'dbo.loyalty_dev_summary', N'U') IS NULL

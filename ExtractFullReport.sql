@@ -22,6 +22,6 @@ SELECT [SITE], [EXTRACT_DTTM], [LOOKBACK_YR], GENDER_DENOMINATORS_YN, [CUTOFF_FI
 , FORMAT(1.0*[TotalSubjectsMale]/[TotalSubjects],'P') AS PercentMale
 , [RUNTIMEms]
 FROM [dbo].[loyalty_dev_summary] 
-WHERE Summary_Description = 'PercentOfSubjects' and convert(date,EXTRACT_DTTM) = convert(date,getdate())
+WHERE Summary_Description = 'PercentOfSubjects' 
 ORDER BY GENDER_DENOMINATORS_YN, LOOKBACK_YR, CUTOFF_FILTER_YN, TABLENAME;
 

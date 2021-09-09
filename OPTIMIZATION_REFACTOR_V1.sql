@@ -1,13 +1,13 @@
-IF OBJECT_ID(N'DBO.usp_LoyaltyCohort_opt') IS NOT NULL DROP PROCEDURE DBO.usp_LoyaltyCohort_opt
-GO
+--IF OBJECT_ID(N'DBO.usp_LoyaltyCohort_opt') IS NOT NULL DROP PROCEDURE DBO.usp_LoyaltyCohort_opt
+--GO
 
-CREATE PROC DBO.usp_LoyaltyCohort_opt
-     @indexDate datetime
-    ,@site varchar(10) 
-    ,@lookbackYears int = 1 /* DEFAULT TO 1 YEAR */
-    ,@gendered bit = 0 /* DEFAULT TO NON GENDER VERSION */
-    ,@output bit = 1 /* DEFAULT TO SHOW FINAL OUTPUT */
-AS
+--CREATE PROC DBO.usp_LoyaltyCohort_opt
+--     @indexDate datetime
+--    ,@site varchar(10) 
+--    ,@lookbackYears int = 1 /* DEFAULT TO 1 YEAR */
+--    ,@gendered bit = 0 /* DEFAULT TO NON GENDER VERSION */
+--    ,@output bit = 1 /* DEFAULT TO SHOW FINAL OUTPUT */
+--AS
 
 /* 
    CHECK ANY CUSTOM LOCAL CODES ADDED TO xref_LoyaltyCode_paths AT <PE.1> AND <PE.2> - PLEASE SEE COMMENTS
@@ -17,11 +17,11 @@ SET NOCOUNT ON
 SET XACT_ABORT ON
 
 /* UNCOMMENT IF TESTING PROC BODY ALONE */
---DECLARE @indexDate DATE='20210201'
---DECLARE @site VARCHAR(10) = '' /* ALTER TO YOUR DESIRED SITE CODE */
---DECLARE @lookbackYears INT = 1
---DECLARE @gendered BIT = 0
---DECLARE @output BIT = 1
+DECLARE @indexDate DATE='20210201'
+DECLARE @site VARCHAR(10) = '' /* ALTER TO YOUR DESIRED SITE CODE */
+DECLARE @lookbackYears INT = 1
+DECLARE @gendered BIT = 0
+DECLARE @output BIT = 1
 
 /* create the target summary table if not exists */
 IF OBJECT_ID(N'dbo.loyalty_dev_summary', N'U') IS NULL
@@ -68,7 +68,11 @@ IF OBJECT_ID(N'dbo.loyalty_dev_summary', N'U') IS NULL
 /* ENSURE TEMP IS CLEAR FROM PREVIOUS RUNS */
 IF OBJECT_ID(N'tempdb..#DEMCONCEPT', N'U') IS NOT NULL DROP TABLE #DEMCONCEPT;
 IF OBJECT_ID(N'tempdb..#INCLPAT', N'U') IS NOT NULL DROP TABLE #INCLPAT;
+IF OBJECT_ID(N'tempdb..#NUM_DX_CODES', N'U') IS NOT NULL DROP TABLE #NUM_DX_CODES;
+IF OBJECT_ID(N'tempdb..#MEDUSE_CODES', N'U') IS NOT NULL DROP TABLE #MEDUSE_CODES;
+IF OBJECT_ID(N'tempdb..#VARIABLE_EXPANSION', N'U') IS NOT NULL DROP TABLE #VARIABLE_EXPANSION;
 IF OBJECT_ID(N'tempdb..#cohort', N'U') IS NOT NULL DROP TABLE #cohort;
+IF OBJECT_ID(N'tempdb..#COHORT_FLAGS_PSC', N'U') IS NOT NULL DROP TABLE #COHORT_FLAGS_PSC;
 IF OBJECT_ID(N'tempdb..#cohort_agegrp', N'U') IS NOT NULL DROP TABLE #cohort_agegrp;
 IF OBJECT_ID(N'tempdb..#AGEGRP_PSC', N'U') IS NOT NULL DROP TABLE #AGEGRP_PSC;
 IF OBJECT_ID(N'tempdb..#CHARLSON_VISIT_BASE', N'U') IS NOT NULL DROP TABLE #CHARLSON_VISIT_BASE;
@@ -177,7 +181,53 @@ SELECT @ROWS=@@ROWCOUNT
 IF @ROWS > 0
   RAISERROR(N'Dropping patients with null birth_date - Rows: %d', 1, 1, @ROWS) with nowait;
 
-/* COHORT FLAGS SANS Num_Dx and MedUse */
+/* NEW COHORT FLAGS PSC BLOCK */
+SET @STEPTTS = GETDATE()
+
+SELECT DISTINCT 'Num_DX' as Feature_name, concept_cd
+into #NUM_DX_CODES
+from (
+Select concept_cd
+from ACT_ICD10CM_DX_2018AA d, concept_dimension c
+where d.C_FULLNAME = C.CONCEPT_PATH
+  and (c_basecode is not null and c_basecode <> '')
+UNION ALL
+Select concept_cd 
+from ACT_ICD9CM_DX_2018AA d, concept_dimension c
+where d.C_FULLNAME = C.CONCEPT_PATH
+  and (c_basecode is not null and c_basecode <> '')
+UNION ALL
+/* <PE.2> Check that this subquery returns the concept codes your site added to 
+  xref_LoyaltyCode_paths are returned correctly */
+Select c.concept_cd
+from CONCEPT_DIMENSION c, DBO.xref_LoyaltyCode_paths x 
+where c.CONCEPT_PATH LIKE x.ACT_PATH+'%'  ----- > This block of code handles any local dx codes
+  and (NULLIF(c.CONCEPT_CD,'') is not null)
+  and (NULLIF(x.SiteSpecificCode,'') is not null)
+  and x.[code_type] = 'DX'
+)DX
+
+SELECT DISTINCT 'MedUse' as Feature_name, concept_cd
+INTO #MEDUSE_CODES
+from (
+Select c_basecode as CONCEPT_CD
+from ACT_MED_VA_V2_092818
+where c_basecode is not null and c_basecode  <> ''
+UNION ALL
+select c_basecode as CONCEPT_CD 
+from ACT_MED_ALPHA_V2_121318
+where c_basecode is not null and c_basecode <> ''
+)MU
+
+SELECT FEATURE_NAME, VARIABLE_NAME, THRESHOLD
+INTO #VARIABLE_EXPANSION
+FROM (
+SELECT 'Num_DX' as FEATURE_NAME, 'Num_DX1' as VARIABLE_NAME, 1 AS THRESHOLD UNION ALL
+SELECT 'Num_DX' as FEATURE_NAME, 'Num_DX2' as VARIABLE_NAME, 2 AS THRESHOLD UNION ALL
+SELECT 'MedUse' as FEATURE_NAME, 'MedUse1' as VARIABLE_NAME, 1 AS THRESHOLD UNION ALL
+SELECT 'MedUse' as FEATURE_NAME, 'MedUse2' as VARIABLE_NAME, 2 AS THRESHOLD 
+)VE
+
 SET @STEPTTS = GETDATE()
 
 ;WITH CTE_PARAMS AS (
@@ -186,153 +236,115 @@ from DBO.xref_LoyaltyCode_paths L, CONCEPT_DIMENSION c
 where C.CONCEPT_PATH like L.Act_path+'%'  --jgk: must support local children
 AND code_type IN ('DX','PX','lab','SITE') /* <PE.1> IF YOUR SITE IS MANAGING ANY SITE SPECIFIC CODES FOR THE FOLLOWING DOMAINS SET THEIR CODE_TYPE = 'SITE' IN dbo.xref_LoyaltyCode_paths </PE.1> */
 and (act_path <> '**Not Found' and act_path is not null)
-)
-UPDATE #COHORT
-SET MDVisit_pname2       = CF.MDVisit_pname2
-, MDVisit_pname3         = CF.MDVisit_pname3
-, Mammography            = CF.Mammography
-, BMI                    = CF.BMI
-, FluShot                = CF.FluShot
-, PneumococcalVaccine    = CF.PneumococcalVaccine
-, MedicalExam            = CF.MedicalExam
-, FecalOccultTest        = CF.FecalOccultTest
-, Paptest                = CF.Paptest
-, Colonoscopy            = CF.Colonoscopy
-, PSATest                = CF.PSATest
-, A1C                    = CF.A1C
-, Routine_Care_2         = CF.Routine_Care_2
-FROM #COHORT C,
-(
-  SELECT PATIENT_NUM, MDVisit_pname2, MDVisit_pname3, Mammography, BMI, FluShot, PneumococcalVaccine, MedicalExam, FecalOccultTest, Paptest, Colonoscopy, PSATest, A1C
-    , CASE WHEN (MedicalExam+Mammography+PSATest+Colonoscopy+FecalOccultTest+FluShot+PneumococcalVaccine+A1C+BMI)>=2 THEN 1 ELSE 0 END AS Routine_Care_2
-  FROM (
-    SELECT PATIENT_NUM, MAX(MDVisit_pname2) as MDVisit_pname2, MAX(MDVisit_pname3) as MDVisit_pname3, MAX(Mammography) as Mammography, MAX(BMI) as BMI, MAX(FluShot) as FluShot
-    , MAX(PneumococcalVaccine) as PneumococcalVaccine, MAX(MedicalExam) as MedicalExam, MAX(FecalOccultTest) as FecalOccultTest, MAX(Paptest) as Paptest, MAX(Colonoscopy) as Colonoscopy
-    , MAX(PSATest) as PSATest, MAX(A1C) as A1C
-    FROM (
-      SELECT O.PATIENT_NUM
-      , CASE WHEN COUNT(DISTINCT CASE WHEN P.Feature_name = 'MD visit' THEN CONVERT(DATE,O.START_DATE) ELSE NULL END)  = 2 THEN 1 ELSE 0 END AS MDVisit_pname2
-      , CASE WHEN COUNT(DISTINCT CASE WHEN P.Feature_name = 'MD visit' THEN CONVERT(DATE,O.START_DATE) ELSE NULL END)  > 2 THEN 1 ELSE 0 END AS MDVisit_pname3
-      , MAX(CASE WHEN P.Feature_name = 'Mammography' THEN 1 ELSE 0 END) AS Mammography
-      , MAX(CASE WHEN P.Feature_name = 'BMI' THEN 1 ELSE 0 END) AS BMI
-      , MAX(CASE WHEN P.Feature_name = 'Flu Shot' THEN 1 ELSE 0 END) AS FluShot
-      , MAX(CASE WHEN P.Feature_name = 'Pneumococcal vaccine' THEN 1 ELSE 0 END) AS PneumococcalVaccine
-      , MAX(CASE WHEN P.Feature_name = 'Medical Exam' THEN 1 ELSE 0 END) AS MedicalExam
-      , MAX(CASE WHEN P.Feature_name = 'Fecal occult blood test' THEN 1 ELSE 0 END) AS FecalOccultTest
-      , MAX(CASE WHEN P.Feature_name = 'Pap test' THEN 1 ELSE 0 END) AS Paptest
-      , MAX(CASE WHEN P.Feature_name = 'Colonoscopy' THEN 1 ELSE 0 END) AS Colonoscopy
-      , MAX(CASE WHEN P.Feature_name = 'PSA Test' THEN 1 ELSE 0 END) AS PSATest
-      , MAX(CASE WHEN P.Feature_name = 'A1C' THEN 1 ELSE 0 END) AS A1C
-      from OBSERVATION_FACT o, CTE_PARAMS p
-      where o.CONCEPT_CD = p.CONCEPT_CD
-      AND o.START_DATE >=  dateadd(yy,-@lookbackYears,@indexDate)
-      AND o.START_DATE < @indexDate
-      GROUP BY O.PATIENT_NUM, O.PROVIDER_ID /* AGG AT PROVIDER_ID FIRST LEVEL FOR THE MDVisit_pname VARIABLES */
-    )PA /* PROVIDER GRAIN AGG->BASELINE -- AGG AT PATIENT_NUM GRAIN */
-    GROUP BY PA.PATIENT_NUM
-  )BL /* BASELINE COLLECTED FOR ALL DOMAINS */
-)CF /* COHORT FLAGS INCLUDED ROUTINE_CARE_2 */
-WHERE C.PATIENT_NUM = CF.PATIENT_NUM;
-
-SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
-RAISERROR(N'Cohort Flags (first pass) - Rows: %d - Total Execution (ms): %d  - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
-
-/* Num_Dx1, Num_Dx2, MedUse1, MedUse2 */
-SET @STEPTTS = GETDATE()
-
-;with DxCodes as (
-Select distinct concept_cd
-from ACT_ICD10CM_DX_2018AA d, concept_dimension c
-where d.C_FULLNAME = C.CONCEPT_PATH
-  and (c_basecode is not null and c_basecode <> '')
-UNION
-Select distinct concept_cd 
-from ACT_ICD9CM_DX_2018AA d, concept_dimension c
-where d.C_FULLNAME = C.CONCEPT_PATH
-  and (c_basecode is not null and c_basecode <> '')
-UNION
-/* <PE.2> Check that this subquery returns the concept codes your site added to 
-  xref_LoyaltyCode_paths are returned correctly */
-Select distinct c.concept_cd
-from CONCEPT_DIMENSION c, DBO.xref_LoyaltyCode_paths x 
-where c.CONCEPT_PATH LIKE x.ACT_PATH+'%'  ----- > This block of code handles any local dx codes
-  and (NULLIF(c.CONCEPT_CD,'') is not null)
-  and (NULLIF(x.SiteSpecificCode,'') is not null)
-  and x.[code_type] = 'DX'
-/* </PE.2> */
-)
-, MedCodes as (
-Select  distinct c_basecode as CONCEPT_CD
-from ACT_MED_VA_V2_092818
-where c_basecode is not null and c_basecode  <> ''
-UNION
-select  distinct c_basecode  as CONCEPT_CD 
-from ACT_MED_ALPHA_V2_121318
-where c_basecode is not null and c_basecode <> ''
-)
-, CTE_CATGRY AS (
-SELECT DISTINCT 'DX' AS CATGRY, CONCEPT_CD
-FROM DxCodes
-WHERE CHARINDEX(':',CONCEPT_CD) > 0
-UNION ALL
-SELECT DISTINCT 'MED' AS CATGRY, CONCEPT_CD
-FROM MedCodes
-WHERE CHARINDEX(':',CONCEPT_CD) > 0
-)
-, CTE_CNTDSVCDT_VARS AS (
-  SELECT PATIENT_NUM
-    , MAX(CASE WHEN CATGRY = 'DX' AND CATCNT > 0 THEN 1 ELSE 0 END  ) AS Num_Dx1 
-    , MAX(CASE WHEN CATGRY = 'DX' AND CATCNT > 1 THEN 1 ELSE 0 END  ) AS Num_Dx2
-    , MAX(CASE WHEN CATGRY = 'MED' AND CATCNT > 0 THEN 1 ELSE 0 END ) AS MedUse1
-    , MAX(CASE WHEN CATGRY = 'MED' AND CATCNT > 1 THEN 1 ELSE 0 END ) AS MedUse2
-  FROM (
-  SELECT O.PATIENT_NUM, P.CATGRY
-    , COUNT(DISTINCT CONVERT(DATE,O.START_DATE)) AS CATCNT
-  FROM OBSERVATION_FACT O, CTE_CATGRY p
-        where o.CONCEPT_CD = P.CONCEPT_CD
-        AND o.START_DATE >=  dateadd(yy,-@lookbackYears,@indexDate)
-        AND o.START_DATE < @indexDate
-  GROUP BY O.PATIENT_NUM, P.CATGRY
-  )CA
-  GROUP BY CA.PATIENT_NUM
-)
-UPDATE #cohort
-SET Num_Dx1 = CSD.Num_Dx1,
-  Num_Dx2 = CSD.Num_Dx2,
-  MedUse1 = CSD.MedUse1,
-  MedUse2 = CSD.MedUse2
-FROM #cohort C, CTE_CNTDSVCDT_VARS CSD
-WHERE C.PATIENT_NUM = CSD.PATIENT_NUM;
-
-SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
-RAISERROR(N'Num_Dx and MedUse flags - Rows: %d - Total Execution (ms): %d - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
-
-/* Predicated Score Calculation v2*/
-SET @STEPTTS = GETDATE()
-
-UPDATE #cohort
-SET Predicted_score = PS.Predicted_score
-FROM #cohort C,
-(
-SELECT PATIENT_NUM, -0.010+(p.MDVisit_pname2*CAST(c.MDVisit_pname2 AS INT))+(p.MDVisit_pname3*CAST(c.MDVisit_pname3 AS INT))+(p.MedicalExam*CAST(C.MedicalExam AS INT))
-  +(p.Mammography*CAST(c.Mammography AS INT))+(p.PapTest*CAST(c.PapTest as INT))+(p.PSATest*CAST(c.PSATest AS INT))+(p.Colonoscopy*CAST(c.Colonoscopy AS INT))
-  +(p.FecalOccultTest*CAST(c.FecalOccultTest AS INT))+(p.FluShot*CAST(c.FluShot AS INT))+(p.PneumococcalVaccine*CAST(c.PneumococcalVaccine AS INT))
-  +(p.BMI*CAST(c.BMI AS INT))+(p.A1C*CAST(c.A1C as INT))+(p.MedUse1*CAST(c.MedUse1 AS INT))+(p.MedUse2*CAST(c.MedUse2 AS INT))+(p.INP1_OPT1_Visit*CAST(c.INP1_OPT1_Visit AS INT))
-  +(p.OPT2_Visit*CAST(c.OPT2_Visit AS INT))+(p.ED_Visit*CAST(c.ED_Visit AS INT))+(p.Num_Dx1*CAST(c.Num_Dx1 AS INT))
-  +(p.Num_Dx2*CAST(c.Num_Dx2 AS INT))+(p.Routine_Care_2*CAST(c.Routine_Care_2 AS INT))
-  AS Predicted_score
+UNION 
+SELECT FEATURE_NAME, CONCEPT_CD, 'DX' AS CODE_TYPE FROM #NUM_DX_CODES
+UNION 
+SELECT FEATURE_NAME, CONCEPT_CD, 'DRUG' AS CODE_TYPE FROM #MEDUSE_CODES
+) 
+, CTE_FEATURE_OCCUR AS (
+SELECT PATIENT_NUM
+  , CASE  WHEN Feature_name = 'MD visit' AND OCCUR = 2 THEN 'MDVisit_pname2'
+          WHEN Feature_name = 'MD visit' AND OCCUR > 2 THEN 'MDVisit_pname3'
+          ELSE Feature_name END as Feature_name
+  , CASE  WHEN Feature_name = 'MD visit' AND OCCUR = 2 THEN 1
+          WHEN Feature_name = 'MD visit' AND OCCUR > 2 THEN 1
+          ELSE OCCUR END as OCCUR
 FROM (
-select FIELD_NAME, COEFF
-from xref_LoyaltyCode_PSCoeff
+SELECT DISTINCT O.PATIENT_NUM, P.[FEATURE_NAME]
+  , CASE /*WHEN FEATURE_NAME = 'MD visit' THEN COUNT(DISTINCT CHECKSUM(CONVERT(DATE,O.START_DATE),PROVIDER_ID))*/
+         WHEN FEATURE_NAME IN ('MD visit','Num_DX','Meduse') THEN COUNT(DISTINCT CONVERT(DATE,O.START_DATE))
+         ELSE COUNT(*) END OCCUR
+FROM OBSERVATION_FACT o, CTE_PARAMS p
+where o.CONCEPT_CD = p.CONCEPT_CD
+AND O.START_DATE >=  dateadd(yy,-@lookbackYears,@indexDate)
+AND O.START_DATE < @indexDate
+AND O.PATIENT_NUM IN (SELECT PATIENT_NUM FROM #COHORT)
+GROUP BY O.PATIENT_NUM, P.[FEATURE_NAME]
+) FOMV
+)
+, CTE_PSC AS (
+SELECT VE.PATIENT_NUM, VE.VARIABLE_NAME, VE.OCCUR
+  , PSC.COEFF
+  , -0.010+SUM(PSC.COEFF) OVER (PARTITION BY VE.PATIENT_NUM ORDER BY (SELECT 1)) Predicted_Score
+FROM (
+  SELECT FO.PATIENT_NUM, COALESCE(VE.VARIABLE_NAME,FO.Feature_name) AS VARIABLE_NAME,  IIF(FO.OCCUR>0,1,0) OCCUR
+  FROM CTE_FEATURE_OCCUR FO
+    LEFT JOIN #VARIABLE_EXPANSION VE
+      ON FO.FEATURE_NAME = VE.FEATURE_NAME
+      AND FO.OCCUR >= VE.THRESHOLD
+  UNION ALL
+  SELECT PATIENT_NUM, 'Routine_Care_2' as VARIABLE_NAME, SUM(IIF(FO.OCCUR>0,1,0)) OCCUR
+  FROM CTE_FEATURE_OCCUR FO
+  WHERE Feature_name IN ('MedicalExam','Mammography','PSATest','Colonoscopy','FecalOccultTest','FluShot','PneumococcalVaccine','A1C','BMI')
+  GROUP BY PATIENT_NUM
+  HAVING SUM(IIF(FO.OCCUR>0,1,0)) >= 2
+  UNION ALL
+  SELECT PATIENT_NUM, 'INP1_OPT1_Visit' AS VARIABLE_NAME, INP1_OPT1_VISIT FROM #COHORT WHERE INP1_OPT1_VISIT != 0
+  UNION ALL
+  SELECT PATIENT_NUM, 'OPT2_Visit' AS VARIABLE_NAME, OPT2_Visit FROM #COHORT WHERE OPT2_Visit != 0
+  UNION ALL
+  SELECT PATIENT_NUM, 'ED_Visit' AS VARIABLE_NAME, ED_Visit FROM #COHORT WHERE ED_Visit != 0
+)VE JOIN dbo.xref_LoyaltyCode_PSCoeff PSC
+  on VE.VARIABLE_NAME = PSC.FIELD_NAME
+)
+SELECT PATIENT_NUM,
+MAX(SEX) AS SEX,
+MAX(AGE) AS AGE,
+MAX([Num_DX1]) AS [Num_DX1],
+MAX([Num_DX2]) AS [Num_DX2],
+MAX([MedUse1]) AS [MedUse1],
+MAX([MedUse2]) AS [MedUse2],
+MAX([Mammography]) AS [Mammography],
+MAX([PapTest]) AS [PapTest],
+MAX([PSATest]) AS [PSATest],
+MAX([Colonoscopy]) AS [Colonoscopy],
+MAX(FecalOccultTest) AS FecalOccultTest,
+MAX([FluShot]) AS [FluShot],
+MAX([PneumococcalVaccine]) AS [PneumococcalVaccine],
+MAX([BMI]) AS [BMI],
+MAX([A1C]) AS [A1C],
+MAX([MedicalExam]) AS [MedicalExam],
+MAX([INP1_OPT1_Visit]) AS [INP1_OPT1_Visit],
+MAX([OPT2_Visit]) AS [OPT2_Visit],
+MAX([ED_Visit]) AS [ED_Visit],
+MAX([MDVisit_pname2]) AS [MDVisit_pname2],
+MAX([MDVisit_pname3]) AS [MDVisit_pname3],
+MAX([Routine_Care_2]) AS [Routine_Care_2],
+MAX([Predicted_Score]) AS [Predicted_Score],
+MAX(LAST_VISIT) AS LAST_VISIT
+INTO #COHORT_FLAGS_PSC
+FROM (
+SELECT PATIENT_NUM, SEX, AGE, [Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], FecalOccultTest, [FluShot], [PneumococcalVaccine]
+  , [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3]
+  , [Routine_Care_2]
+  , Predicted_Score
+  , LAST_VISIT
+FROM #COHORT 
+UNION ALL 
+SELECT PATIENT_NUM, NULL AS SEX, NULL AS AGE
+  , [Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], FecalOccultTest, [FluShot], [PneumococcalVaccine]
+  , [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3]
+  , [Routine_Care_2], Predicted_Score
+  , NULL AS LAST_VISIT
+FROM (
+SELECT * 
+FROM CTE_PSC
 )U
-PIVOT /* ORACLE EQUIV : https://www.oracletutorial.com/oracle-basics/oracle-unpivot/ */
-(MAX(COEFF) for FIELD_NAME in (MDVisit_pname2, MDVisit_pname3, MedicalExam, Mammography, PapTest, PSATest, Colonoscopy, FecalOccultTest, FluShot, PneumococcalVaccine
-  , BMI, A1C, MedUse1, MedUse2, INP1_OPT1_Visit, OPT2_Visit, Num_Dx1, Num_Dx2, ED_Visit, Routine_Care_2))p, #COHORT c
-)PS
-WHERE C.PATIENT_NUM = PS.PATIENT_NUM;
+PIVOT
+(MAX(OCCUR) FOR VARIABLE_NAME IN ([Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], [FecalOccultTest], [FluShot], [PneumococcalVaccine]
+, [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3],[Routine_Care_2]))P
+)COHORT_FLAGS
+GROUP BY PATIENT_NUM
+
+TRUNCATE TABLE #COHORT
+
+INSERT INTO #COHORT (PATIENT_NUM, SEX, AGE, [Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], FecalOccultTest, [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3] , Routine_Care_2 , Predicted_Score , LAST_VISIT)
+SELECT PATIENT_NUM, SEX, AGE, [Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], FecalOccultTest, [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3]
+  , Routine_Care_2, Predicted_Score, LAST_VISIT
+FROM #COHORT_FLAGS_PSC
 
 SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
-RAISERROR(N'Predicated Score v2 - Rows: %d - Total Execution (ms): %d  - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
+RAISERROR(N'Cohort Flags - Rows: %d - Total Execution (ms): %d  - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
 
 /* Cohort Agegrp - Makes Predictive Score filtering easier in final step if pre-calculated */
 SET @STEPTTS = GETDATE()

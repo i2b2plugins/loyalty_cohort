@@ -204,15 +204,12 @@ SET @STEPTTS = GETDATE()
 SELECT DISTINCT 'Num_DX' as Feature_name, concept_cd
 into #NUM_DX_CODES
 from (
-Select concept_cd
-from ACT_ICD10CM_DX_2018AA d, concept_dimension c
-where d.C_FULLNAME = C.CONCEPT_PATH
-  and (c_basecode is not null and c_basecode <> '')
-UNION ALL
-Select concept_cd 
-from ACT_ICD9CM_DX_2018AA d, concept_dimension c
-where d.C_FULLNAME = C.CONCEPT_PATH
-  and (c_basecode is not null and c_basecode <> '')
+SELECT DISTINCT CD.CONCEPT_CD
+FROM TABLE_ACCESS TA
+  JOIN CONCEPT_DIMENSION CD
+    ON CD.CONCEPT_PATH LIKE TA.C_FULLNAME+'%'
+WHERE TA.C_NAME LIKE 'ACT Diagnoses%'
+    AND NULLIF(CD.CONCEPT_CD,'') IS NOT NULL
 UNION ALL
 /* <PE.2> Check that this subquery returns the concept codes your site added to 
   xref_LoyaltyCode_paths are returned correctly */
@@ -227,13 +224,12 @@ where c.CONCEPT_PATH LIKE x.ACT_PATH+'%'  ----- > This block of code handles any
 SELECT DISTINCT 'MedUse' as Feature_name, concept_cd
 INTO #MEDUSE_CODES
 from (
-Select c_basecode as CONCEPT_CD
-from ACT_MED_VA_V2_092818
-where c_basecode is not null and c_basecode  <> ''
-UNION ALL
-select c_basecode as CONCEPT_CD 
-from ACT_MED_ALPHA_V2_121318
-where c_basecode is not null and c_basecode <> ''
+SELECT DISTINCT CD.CONCEPT_CD
+FROM TABLE_ACCESS TA
+  JOIN CONCEPT_DIMENSION CD
+    ON CD.CONCEPT_PATH LIKE TA.C_FULLNAME+'%'
+WHERE TA.C_NAME LIKE 'ACT Medications%'
+  AND NULLIF(CD.CONCEPT_CD,'') IS NOT NULL
 )MU
 
 SELECT FEATURE_NAME, VARIABLE_NAME, THRESHOLD
@@ -268,6 +264,7 @@ SELECT PATIENT_NUM
           ELSE OCCUR END as OCCUR
 FROM (
 SELECT DISTINCT O.PATIENT_NUM, P.[FEATURE_NAME]
+  /* ALTERED THE MD visit variables to ignore distinct provider_id to allow it to count at least distinct visit dates at sites that only load '@' for PROVIDER_ID */
   , CASE /*WHEN FEATURE_NAME = 'MD visit' THEN COUNT(DISTINCT CHECKSUM(CONVERT(DATE,O.START_DATE),PROVIDER_ID))*/
          WHEN FEATURE_NAME IN ('MD visit','Num_DX','Meduse') THEN COUNT(DISTINCT CONVERT(DATE,O.START_DATE))
          ELSE COUNT(*) END OCCUR

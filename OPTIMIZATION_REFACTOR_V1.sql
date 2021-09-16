@@ -820,7 +820,6 @@ if(@output=1) /* Only if Output parameter was passed */
   , [Mammography], [PapTest], [PSATest], [Colonoscopy], [FecalOccultTest], [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit]
   , [MDVisit_pname2], [MDVisit_pname3], [Routine_care_2], [Subjects_NoCriteria], [PredictiveScoreCutoff]
   , [MEAN_10YRPROB], [MEDIAN_10YR_SURVIVAL], [MODE_10YRPROB], [STDEV_10YRPROB]
-  , [TotalSubjects], [TotalSubjectsFemale], [TotalSubjectsMale]
   , FORMAT(1.0*[TotalSubjectsFemale]/[TotalSubjects],'P') AS PercentFemale
   , FORMAT(1.0*[TotalSubjectsMale]/[TotalSubjects],'P') AS PercentMale
   , [RUNTIMEms]

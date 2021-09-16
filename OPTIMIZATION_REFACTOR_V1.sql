@@ -816,16 +816,25 @@ RAISERROR(N'Final Summary Table - Rows: %d - Total Execution (ms): %d - Step Run
 
 /* FINAL OUTPUT FOR SHARED SPREADSHEET */
 if(@output=1) /* Only if Output parameter was passed */
-  SELECT [SITE], [EXTRACT_DTTM], [LOOKBACK_YR], GENDER_DENOMINATORS_YN, [CUTOFF_FILTER_YN], [Summary_Description], [tablename], [Num_DX1], [Num_DX2], [MedUse1], [MedUse2]
-  , [Mammography], [PapTest], [PSATest], [Colonoscopy], [FecalOccultTest], [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit]
-  , [MDVisit_pname2], [MDVisit_pname3], [Routine_care_2], [Subjects_NoCriteria], [PredictiveScoreCutoff]
-  , [MEAN_10YRPROB], [MEDIAN_10YR_SURVIVAL], [MODE_10YRPROB], [STDEV_10YRPROB]
-  , FORMAT(1.0*[TotalSubjectsFemale]/[TotalSubjects],'P') AS PercentFemale
-  , FORMAT(1.0*[TotalSubjectsMale]/[TotalSubjects],'P') AS PercentMale
-  , [RUNTIMEms]
-  FROM [dbo].[loyalty_dev_summary] 
-  WHERE Summary_Description = 'PercentOfSubjects' 
-    AND LOOKBACK_YR = @lookbackYears
-    AND GENDER_DENOMINATORS_YN =  IIF(@gendered=0,'N','Y')
-    AND [SITE] = @site
-  ORDER BY LOOKBACK_YR, CUTOFF_FILTER_YN, TABLENAME;
+  SELECT LDS.[SITE], LDS.[EXTRACT_DTTM], LDS.[LOOKBACK_YR], LDS.GENDER_DENOMINATORS_YN, LDS.[CUTOFF_FILTER_YN], LDS.[Summary_Description], LDS.[tablename], LDS.[Num_DX1], LDS.[Num_DX2], LDS.[MedUse1], LDS.[MedUse2]
+  , LDS.[Mammography], LDS.[PapTest], LDS.[PSATest], LDS.[Colonoscopy], LDS.[FecalOccultTest], LDS.[FluShot], LDS.[PneumococcalVaccine], LDS.[BMI], LDS.[A1C], LDS.[MedicalExam], LDS.[INP1_OPT1_Visit], LDS.[OPT2_Visit], LDS.[ED_Visit]
+  , LDS.[MDVisit_pname2], LDS.[MDVisit_pname3], LDS.[Routine_care_2], LDS.[Subjects_NoCriteria], LDS.[PredictiveScoreCutoff]
+  , LDS.[MEAN_10YRPROB], LDS.[MEDIAN_10YR_SURVIVAL], LDS.[MODE_10YRPROB], LDS.[STDEV_10YRPROB]
+  , FORMAT(1.0*LDS.TotalSubjects/T.TotalSubjects,'P') AS PercPopulation
+  , FORMAT(1.0*LDS.[TotalSubjectsFemale]/LDS.[TotalSubjects],'P') AS PercentFemale
+  , FORMAT(1.0*LDS.[TotalSubjectsMale]/LDS.[TotalSubjects],'P') AS PercentMale
+  , LDS.[RUNTIMEms]
+  FROM [dbo].[loyalty_dev_summary] lds
+    JOIN [dbo].[loyalty_dev_summary] T 
+      ON T.SITE = LDS.SITE 
+      AND T.EXTRACT_DTTM = LDS.EXTRACT_DTTM 
+      AND T.LOOKBACK_YR = LDS.LOOKBACK_YR
+      AND T.GENDER_DENOMINATORS_YN = LDS.GENDER_DENOMINATORS_YN
+      AND T.CUTOFF_FILTER_YN = LDS.CUTOFF_FILTER_YN
+      AND T.Summary_Description = 'PercentOfSubjects'
+      AND T.tablename = 'All Patients'
+  WHERE LDS.Summary_Description = 'PercentOfSubjects' 
+    AND LDS.LOOKBACK_YR = @lookbackYears
+    AND LDS.GENDER_DENOMINATORS_YN =  IIF(@gendered=0,'N','Y')
+    AND LDS.[SITE] = @site
+  ORDER BY LDS.CUTOFF_FILTER_YN, LDS.TABLENAME;

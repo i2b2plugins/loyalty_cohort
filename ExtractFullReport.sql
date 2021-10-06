@@ -21,6 +21,7 @@ SELECT LDS.[SITE], LDS.[EXTRACT_DTTM], LDS.[LOOKBACK_YR], LDS.GENDER_DENOMINATOR
 , FORMAT(1.0*LDS.TotalSubjects/T.TotalSubjects,'P') AS PercPopulation
 , FORMAT(1.0*LDS.[TotalSubjectsFemale]/LDS.[TotalSubjects],'P') AS PercentFemale
 , FORMAT(1.0*LDS.[TotalSubjectsMale]/LDS.[TotalSubjects],'P') AS PercentMale
+, LDS.AverageFactCount
 , LDS.[RUNTIMEms]
 FROM [dbo].[loyalty_dev_summary] lds
   JOIN [dbo].[loyalty_dev_summary] T 

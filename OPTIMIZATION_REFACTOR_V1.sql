@@ -62,6 +62,7 @@ IF OBJECT_ID(N'dbo.loyalty_dev_summary', N'U') IS NULL
     [TotalSubjects] int NULL,
     [TotalSubjectsFemale] int NULL,
     [TotalSubjectsMale] int NULL,
+    [AverageFactCount] float NULL,
     [EXTRACT_DTTM] DATETIME NOT NULL DEFAULT GETDATE(),
     [LOOKBACK_YR] INT NOT NULL,
     [RUNTIMEms] int NULL
@@ -75,6 +76,7 @@ IF OBJECT_ID(N'tempdb..#MEDUSE_CODES', N'U') IS NOT NULL DROP TABLE #MEDUSE_CODE
 IF OBJECT_ID(N'tempdb..#VARIABLE_EXPANSION', N'U') IS NOT NULL DROP TABLE #VARIABLE_EXPANSION;
 IF OBJECT_ID(N'tempdb..#cohort', N'U') IS NOT NULL DROP TABLE #cohort;
 IF OBJECT_ID(N'tempdb..#COHORT_FLAGS_PSC', N'U') IS NOT NULL DROP TABLE #COHORT_FLAGS_PSC;
+IF OBJECT_ID(N'tempdb..#COHORT_FLAGS_AFC', N'U') IS NOT NULL DROP TABLE #COHORT_FLAGS_AFC;
 IF OBJECT_ID(N'tempdb..#cohort_agegrp', N'U') IS NOT NULL DROP TABLE #cohort_agegrp;
 IF OBJECT_ID(N'tempdb..#AGEGRP_PSC', N'U') IS NOT NULL DROP TABLE #AGEGRP_PSC;
 IF OBJECT_ID(N'tempdb..#CHARLSON_VISIT_BASE', N'U') IS NOT NULL DROP TABLE #CHARLSON_VISIT_BASE;
@@ -443,6 +445,36 @@ GROUP BY AGEGRP
 SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
 RAISERROR(N'Prepare #AGEGRP_PSC - Rows: %d - Total Execution (ms): %d  - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
 
+/* Calculate average fact counts over Agegroups */
+SET @STEPTTS = GETDATE()
+
+SELECT CUTOFF_FILTER_YN, AGEGRP, AVG_FACT_COUNT
+INTO #AGEGRP_AFC
+FROM
+(
+SELECT CAST('N' AS CHAR(1)) AS CUTOFF_FILTER_YN, cag.AGEGRP, 1.0*count(o.concept_cd)/count(distinct cag.patient_num) as AVG_FACT_COUNT
+FROM #cohort_agegrp cag
+  join OBSERVATION_FACT O
+    ON cag.patient_num = O.PATIENT_NUM
+WHERE O.START_DATE >= dateadd(yy,-@lookbackYears,@indexDate) AND O.START_DATE < @indexDate
+group by cag.AGEGRP
+UNION ALL
+SELECT CAST('Y' AS CHAR(1)) AS CUTOFF_FILTER_YN, cag.AGEGRP, 1.0*count(o.concept_cd)/count(distinct cag.patient_num) as AVG_FACT_COUNT
+FROM #cohort_agegrp cag
+  JOIN #AGEGRP_PSC PSC
+    ON cag.AGEGRP = PSC.AGEGRP
+      AND cag.Predicted_score >= PSC.PredictiveScoreCutoff
+  join OBSERVATION_FACT O
+    ON cag.patient_num = O.PATIENT_NUM
+WHERE O.START_DATE >= dateadd(yy,-@lookbackYears,@indexDate) AND O.START_DATE < @indexDate
+group by cag.AGEGRP
+)AFC
+
+SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
+RAISERROR(N'Average Fact Counts - Rows: %d - Total Execution (ms): %d  - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
+
+
+
 /* OPTIONAL CHARLSON COMORBIDITY INDEX -- ADDS APPROX. 1m in UKY environment. 
    REQUIRES SITE TO LOAD LU_CHARLSON FROM REPO 
 */
@@ -654,14 +686,16 @@ INSERT INTO dbo.loyalty_dev_summary ([SITE], [LOOKBACK_YR], GENDER_DENOMINATORS_
 , [Mammography], [PapTest], [PSATest], [Colonoscopy], [FecalOccultTest], [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit]
 , [MDVisit_pname2], [MDVisit_pname3], [Routine_care_2], [Subjects_NoCriteria], [PredictiveScoreCutoff]
 , [MEAN_10YRPROB], [MEDIAN_10YR_SURVIVAL], [MODE_10YRPROB], [STDEV_10YRPROB], [TotalSubjects]
-, TotalSubjectsFemale, TotalSubjectsMale)
+, TotalSubjectsFemale, TotalSubjectsMale, AverageFactCount)
 SELECT @site, @lookbackYears, IIF(@gendered=0,'N','Y') as GENDER_DENOMINATORS_YN, COHORTAGG.CUTOFF_FILTER_YN, Summary_Description, COHORTAGG.AGEGRP as tablename, Num_DX1, Num_DX2, MedUse1, MedUse2
   , Mammography, PapTest, PSATest, Colonoscopy, FecalOccultTest, FluShot, PneumococcalVaccine, BMI, A1C, MedicalExam, INP1_OPT1_Visit, OPT2_Visit, ED_Visit
   , MDVisit_pname2, MDVisit_pname3, Routine_care_2, Subjects_NoCriteria
   , CASE WHEN COHORTAGG.CUTOFF_FILTER_YN = 'Y' THEN CP.PredictiveScoreCutoff ELSE NULL END AS PredictiveScoreCutoff
-  , CS.MEAN_10YRPROB, CS.MEDIAN_10YR_SURVIVAL, CS.MODE_10YRPROB, CS.STDEV_10YRPROB, TotalSubjects
+  , CS.MEAN_10YRPROB, CS.MEDIAN_10YR_SURVIVAL, CS.MODE_10YRPROB, CS.STDEV_10YRPROB
+  , TotalSubjects
   , TotalSubjectsFemale
   , TotalSubjectsMale
+  , FC.AVG_FACT_COUNT as AverageFactCount
 FROM (
 /* FILTERED BY PREDICTIVE CUTOFF */
 SELECT
@@ -798,6 +832,9 @@ group by CAG.AGEGRP
   JOIN #CHARLSON_STATS CS
     ON COHORTAGG.AGEGRP = CS.AGEGRP
       AND COHORTAGG.CUTOFF_FILTER_YN = CS.CUTOFF_FILTER_YN
+  JOIN #AGEGRP_AFC FC
+    ON COHORTAGG.AGEGRP = FC.AGEGRP
+      AND COHORTAGG.CUTOFF_FILTER_YN = FC.CUTOFF_FILTER_YN
 
 SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
 RAISERROR(N'Final Summary Table - Rows: %d - Total Execution (ms): %d - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
@@ -825,6 +862,7 @@ if(@output=1) /* Only if Output parameter was passed */
   , FORMAT(1.0*LDS.TotalSubjects/T.TotalSubjects,'P') AS PercPopulation
   , FORMAT(1.0*LDS.[TotalSubjectsFemale]/LDS.[TotalSubjects],'P') AS PercentFemale
   , FORMAT(1.0*LDS.[TotalSubjectsMale]/LDS.[TotalSubjects],'P') AS PercentMale
+  , LDS.AverageFactCount
   , LDS.[RUNTIMEms]
   FROM [dbo].[loyalty_dev_summary] lds
     JOIN [dbo].[loyalty_dev_summary] T 

@@ -961,7 +961,7 @@ SET RUNTIMEms = @ENDRUNTIMEms
 FROM [dbo].[loyalty_dev_summary] LDS
   JOIN @cohort_filter CF
     ON LDS.COHORT_NAME = IIF(@filter_by_existing_cohort=0,'N/A',CF.cohort_name)
-    AND LDS.FILTER_BY_COHORT_YN = 'Y'
+    AND LDS.FILTER_BY_COHORT_YN = IIF(@filter_by_existing_cohort=0,'N','Y')
     AND LDS.LOOKBACK_YR = @lookbackYears
     AND LDS.SITE = @site
     AND LDS.GENDER_DENOMINATORS_YN = IIF(@gendered=0,'N','Y')
@@ -978,7 +978,7 @@ RAISERROR(N'Final Summary Table - Rows: %d - Total Execution (ms): %d - Step Run
 
 /* FINAL OUTPUT FOR SHARED SPREADSHEET */
 if(@output=1) /* Only if Output parameter was passed */
-  SELECT DISTINCT LDS.COHORT_NAME, LDS.[SITE], LDS.[EXTRACT_DTTM], LDS.[LOOKBACK_YR], LDS.GENDER_DENOMINATORS_YN, LDS.[CUTOFF_FILTER_YN], LDS.[Summary_Description], LDS.[tablename], LDS.[Num_DX1], LDS.[Num_DX2], LDS.[MedUse1], LDS.[MedUse2]
+  SELECT DISTINCT LDS.FILTER_BY_COHORT_YN, LDS.COHORT_NAME, LDS.[SITE], LDS.[EXTRACT_DTTM], LDS.[LOOKBACK_YR], LDS.GENDER_DENOMINATORS_YN, LDS.[CUTOFF_FILTER_YN], LDS.[Summary_Description], LDS.[tablename], LDS.[Num_DX1], LDS.[Num_DX2], LDS.[MedUse1], LDS.[MedUse2]
   , LDS.[Mammography], LDS.[PapTest], LDS.[PSATest], LDS.[Colonoscopy], LDS.[FecalOccultTest], LDS.[FluShot], LDS.[PneumococcalVaccine], LDS.[BMI], LDS.[A1C], LDS.[MedicalExam], LDS.[INP1_OPT1_Visit], LDS.[OPT2_Visit], LDS.[ED_Visit]
   , LDS.[MDVisit_pname2], LDS.[MDVisit_pname3], LDS.[Routine_care_2], LDS.[Subjects_NoCriteria], LDS.[PredictiveScoreCutoff]
   , LDS.[MEAN_10YRPROB], LDS.[MEDIAN_10YR_SURVIVAL], LDS.[MODE_10YRPROB], LDS.[STDEV_10YRPROB]
@@ -1002,4 +1002,4 @@ if(@output=1) /* Only if Output parameter was passed */
     AND LDS.GENDER_DENOMINATORS_YN =  IIF(@gendered=0,'N','Y')
     AND LDS.[SITE] = @site
     AND LDS.COHORT_NAME IN (SELECT COHORT_NAME FROM @cohort_filter)
-  ORDER BY LDS.COHORT_NAME, LDS.CUTOFF_FILTER_YN, LDS.TABLENAME;
+  ORDER BY LDS.FILTER_BY_COHORT_YN, LDS.COHORT_NAME, LDS.CUTOFF_FILTER_YN, LDS.TABLENAME;

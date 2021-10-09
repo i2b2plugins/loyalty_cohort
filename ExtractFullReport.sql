@@ -31,7 +31,7 @@ EXEC [dbo].[usp_LoyaltyCohort_opt] @indexDate = '20210201', @site='UKY', @lookba
 EXEC [dbo].[usp_LoyaltyCohort_opt] @indexDate = '20210201', @site='UKY', @lookbackYears=10, @demographic_facts=1, @gendered=1, @filter_by_existing_cohort=1, @cohort_filter=@cfilter, @output=0
 
 
-SELECT LDS.[SITE], LDS.[EXTRACT_DTTM], LDS.[LOOKBACK_YR], LDS.GENDER_DENOMINATORS_YN, LDS.[CUTOFF_FILTER_YN], LDS.[Summary_Description], LDS.[tablename], LDS.[Num_DX1], LDS.[Num_DX2], LDS.[MedUse1], LDS.[MedUse2]
+SELECT distinct LDS. FILTER_BY_COHORT_YN, LDS.COHORT_NAME, LDS.[SITE], LDS.[EXTRACT_DTTM], LDS.[LOOKBACK_YR], LDS.GENDER_DENOMINATORS_YN, LDS.[CUTOFF_FILTER_YN], LDS.[Summary_Description], LDS.[tablename], LDS.[Num_DX1], LDS.[Num_DX2], LDS.[MedUse1], LDS.[MedUse2]
 , LDS.[Mammography], LDS.[PapTest], LDS.[PSATest], LDS.[Colonoscopy], LDS.[FecalOccultTest], LDS.[FluShot], LDS.[PneumococcalVaccine], LDS.[BMI], LDS.[A1C], LDS.[MedicalExam], LDS.[INP1_OPT1_Visit], LDS.[OPT2_Visit], LDS.[ED_Visit]
 , LDS.[MDVisit_pname2], LDS.[MDVisit_pname3], LDS.[Routine_care_2], LDS.[Subjects_NoCriteria], LDS.[PredictiveScoreCutoff]
 , LDS.[MEAN_10YRPROB], LDS.[MEDIAN_10YR_SURVIVAL], LDS.[MODE_10YRPROB], LDS.[STDEV_10YRPROB]
@@ -42,7 +42,8 @@ SELECT LDS.[SITE], LDS.[EXTRACT_DTTM], LDS.[LOOKBACK_YR], LDS.GENDER_DENOMINATOR
 , LDS.[RUNTIMEms]
 FROM [dbo].[loyalty_dev_summary] lds
   JOIN [dbo].[loyalty_dev_summary] T 
-    ON T.SITE = LDS.SITE 
+  ON T.COHORT_NAME = LDS.COHORT_NAME
+    AND T.SITE = LDS.SITE 
     AND T.EXTRACT_DTTM = LDS.EXTRACT_DTTM 
     AND T.LOOKBACK_YR = LDS.LOOKBACK_YR
     AND T.GENDER_DENOMINATORS_YN = LDS.GENDER_DENOMINATORS_YN
@@ -50,6 +51,7 @@ FROM [dbo].[loyalty_dev_summary] lds
     AND T.Summary_Description = 'PercentOfSubjects'
     AND T.tablename = 'All Patients'
 WHERE LDS.Summary_Description = 'PercentOfSubjects' 
-ORDER BY LDS.GENDER_DENOMINATORS_YN, LDS.LOOKBACK_YR, LDS.CUTOFF_FILTER_YN, LDS.TABLENAME;
+ORDER BY LDS.FILTER_BY_COHORT_YN, LDS.COHORT_NAME, LDS.GENDER_DENOMINATORS_YN, LDS.LOOKBACK_YR, LDS.CUTOFF_FILTER_YN, LDS.TABLENAME;
+
 
 

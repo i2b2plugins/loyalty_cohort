@@ -6,7 +6,7 @@ TRUNCATE TABLE [dbo].[loyalty_dev_summary]
 DECLARE @cfilter udt_CohortFilter
 
 INSERT INTO @cfilter (PATIENT_NUM, COHORT_NAME)
-SELECT DISTINCT PATIENT_NUM, cohort
+select distinct patient_num, substring(cohort,1,charindex('202',cohort)-1) cohort /* grouping cohorts without YYYYQ# */
 FROM [I2B2ACT].[4CEX2].[FourCE_LocalPatientSummary] /* SOURCE OF YOUR COHORT TO FILTER BY -- 4CE X.2 COHORT FOR EXAMPLE */
 
 /* Alter @site parameter to your site */

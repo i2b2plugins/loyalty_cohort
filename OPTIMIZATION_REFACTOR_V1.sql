@@ -810,7 +810,7 @@ SELECT cag.cohort_name,
 'Y' AS CUTOFF_FILTER_YN,
 'Patient Counts' as Summary_Description,
 CAG.AGEGRP, 
-count(distinct patient_num) as TotalSubjects,
+count(patient_num) as TotalSubjects,
 sum(cast([Num_Dx1] as int)) as Num_DX1,
 sum(cast([Num_Dx2] as int)) as Num_DX2,
 sum(cast([MedUse1] as int))  as MedUse1,
@@ -833,8 +833,8 @@ sum(cast([MDVisit_pname3] as int)) as MDVisit_pname3,
 sum(cast([Routine_Care_2] as int)) as Routine_care_2,
 SUM(CAST(~(Num_Dx1|Num_Dx2|MedUse1|Mammography|PapTest|PSATest|Colonoscopy|FecalOccultTest|FluShot|PneumococcalVaccine|BMI|
   A1C|MedicalExam|INP1_OPT1_Visit|OPT2_Visit|ED_Visit|MDVisit_pname2|MDVisit_pname3|Routine_Care_2) AS INT)) as Subjects_NoCriteria, /* inverted bitwise OR of all bit flags */
-count(distinct IIF(SEX='F',patient_num,NULL)) AS TotalSubjectsFemale,
-count(distinct IIF(SEX='M',patient_num,NULL)) AS TotalSubjectsMale
+SUM(IIF(SEX='F',1.0,0.0)) AS TotalSubjectsFemale,
+SUM(IIF(SEX='M',1.0,0.0)) AS TotalSubjectsMale
 from #cohort_agegrp CAG JOIN #AGEGRP_PSC P 
   ON CAG.AGEGRP = P.AGEGRP 
   AND CAG.Predicted_score >= P.PredictiveScoreCutoff
@@ -845,7 +845,7 @@ SELECT cag.cohort_name,
 'Y' AS CUTOFF_FILTER_YN,
 'PercentOfSubjects' as Summary_Description,
 CAG.AGEGRP, 
-count(distinct patient_num) as TotalSubjects,
+count(patient_num) as TotalSubjects,
 100*avg(cast([Num_Dx1] as numeric(2,1))) as Num_DX1,
 100*avg(cast([Num_Dx2] as numeric(2,1))) as Num_DX2,
 100*avg(cast([MedUse1] as numeric(2,1)))  as MedUse1,
@@ -868,8 +868,8 @@ count(distinct patient_num) as TotalSubjects,
 100*avg(cast([Routine_Care_2] as numeric(2,1))) as Routine_care_2,
 100*AVG(CAST(~(Num_Dx1|Num_Dx2|MedUse1|Mammography|PapTest|PSATest|Colonoscopy|FecalOccultTest|FluShot|PneumococcalVaccine|BMI|
   A1C|MedicalExam|INP1_OPT1_Visit|OPT2_Visit|ED_Visit|MDVisit_pname2|MDVisit_pname3|Routine_Care_2) AS NUMERIC(2,1))) as Subjects_NoCriteria, /* inverted bitwise OR of all bit flags */
-count(distinct IIF(SEX='F',patient_num,NULL)) AS TotalSubjectsFemale,
-count(distinct IIF(SEX='M',patient_num,NULL)) AS TotalSubjectsMale
+100*AVG(IIF(SEX='F',1.0,0.0)) AS TotalSubjectsFemale,
+100*AVG(IIF(SEX='M',1.0,0.0)) AS TotalSubjectsMale
 from #cohort_agegrp CAG JOIN #AGEGRP_PSC P 
   ON CAG.AGEGRP = P.AGEGRP 
   AND CAG.Predicted_score >= P.PredictiveScoreCutoff
@@ -881,7 +881,7 @@ SELECT CAG.cohort_name,
 'N' AS CUTOFF_FILTER_YN,
 'Patient Counts' as Summary_Description,
 CAG.AGEGRP, 
-count(distinct patient_num) as TotalSubjects,
+count(patient_num) as TotalSubjects,
 sum(cast([Num_Dx1] as int)) as Num_DX1,
 sum(cast([Num_Dx2] as int)) as Num_DX2,
 sum(cast([MedUse1] as int))  as MedUse1,
@@ -904,8 +904,8 @@ sum(cast([MDVisit_pname3] as int)) as MDVisit_pname3,
 sum(cast([Routine_Care_2] as int)) as Routine_care_2,
 SUM(CAST(~(Num_Dx1|Num_Dx2|MedUse1|Mammography|PapTest|PSATest|Colonoscopy|FecalOccultTest|FluShot|PneumococcalVaccine|BMI|
   A1C|MedicalExam|INP1_OPT1_Visit|OPT2_Visit|ED_Visit|MDVisit_pname2|MDVisit_pname3|Routine_Care_2) AS INT)) as Subjects_NoCriteria, /* inverted bitwise OR of all bit flags */
-count(distinct IIF(SEX='F',patient_num,NULL)) AS TotalSubjectsFemale,
-count(distinct IIF(SEX='M',patient_num,NULL)) AS TotalSubjectsMale
+SUM(IIF(SEX='F',1.0,0.0)) AS TotalSubjectsFemale,
+SUM(IIF(SEX='M',1.0,0.0)) AS TotalSubjectsMale
 from #cohort_agegrp CAG
 group by CAG.cohort_name, CAG.AGEGRP
 UNION ALL
@@ -913,7 +913,7 @@ SELECT CAG.cohort_name,
 'N' AS PREDICTIVE_CUTOFF_FILTER_YN,
 'PercentOfSubjects' as Summary_Description,
 CAG.AGEGRP, 
-count(distinct patient_num) as TotalSubjects,
+count(patient_num) as TotalSubjects,
 100*avg(cast([Num_Dx1] as numeric(2,1))) as Num_DX1,
 100*avg(cast([Num_Dx2] as numeric(2,1))) as Num_DX2,
 100*avg(cast([MedUse1] as numeric(2,1)))  as MedUse1,
@@ -930,14 +930,14 @@ count(distinct patient_num) as TotalSubjects,
 100*avg(cast([MedicalExam] as numeric(2,1))) as MedicalExam,
 100*avg(cast([INP1_OPT1_Visit] as numeric(2,1))) as INP1_OPT1_Visit,
 100*avg(cast([OPT2_Visit] as numeric(2,1))) as OPT2_Visit,
-100*avg(cast([ED_Visit] as numeric(2,1)))  as ED_Visit,
+100*avg(cast([ED_Visit] as numeric(2,1))) as ED_Visit,
 100*avg(cast([MDVisit_pname2] as numeric(2,1))) as MDVisit_pname2,
 100*avg(cast([MDVisit_pname3] as numeric(2,1))) as MDVisit_pname3,
 100*avg(cast([Routine_Care_2] as numeric(2,1))) as Routine_care_2,
 100*AVG(CAST(~(Num_Dx1|Num_Dx2|MedUse1|Mammography|PapTest|PSATest|Colonoscopy|FecalOccultTest|FluShot|PneumococcalVaccine|BMI|
   A1C|MedicalExam|INP1_OPT1_Visit|OPT2_Visit|ED_Visit|MDVisit_pname2|MDVisit_pname3|Routine_Care_2) AS NUMERIC(2,1))) as Subjects_NoCriteria, /* inverted bitwise OR of all bit flags */
-count(distinct IIF(SEX='F',patient_num,NULL)) AS TotalSubjectsFemale,
-count(distinct IIF(SEX='M',patient_num,NULL)) AS TotalSubjectsMale
+100*AVG(IIF(SEX='F',1.0,0.0)) AS TotalSubjectsFemale,
+100*AVG(IIF(SEX='M',1.0,0.0)) AS TotalSubjectsMale
 from #cohort_agegrp CAG
 group by CAG.cohort_name, CAG.AGEGRP 
 )COHORTAGG
@@ -982,21 +982,17 @@ if(@output=1) /* Only if Output parameter was passed */
   , LDS.[Mammography], LDS.[PapTest], LDS.[PSATest], LDS.[Colonoscopy], LDS.[FecalOccultTest], LDS.[FluShot], LDS.[PneumococcalVaccine], LDS.[BMI], LDS.[A1C], LDS.[MedicalExam], LDS.[INP1_OPT1_Visit], LDS.[OPT2_Visit], LDS.[ED_Visit]
   , LDS.[MDVisit_pname2], LDS.[MDVisit_pname3], LDS.[Routine_care_2], LDS.[Subjects_NoCriteria], LDS.[PredictiveScoreCutoff]
   , LDS.[MEAN_10YRPROB], LDS.[MEDIAN_10YR_SURVIVAL], LDS.[MODE_10YRPROB], LDS.[STDEV_10YRPROB]
-  , FORMAT(1.0*LDS.TotalSubjects/T.TotalSubjects,'P') AS PercPopulation
-  , FORMAT(1.0*LDS.[TotalSubjectsFemale]/LDS.[TotalSubjects],'P') AS PercentFemale
-  , FORMAT(1.0*LDS.[TotalSubjectsMale]/LDS.[TotalSubjects],'P') AS PercentMale
+  , 100*(CASE WHEN tablename = 'All Patients' THEN 1.0
+       WHEN tablename = 'Over 65'
+         THEN 1.0*TotalSubjects/LAG(TotalSubjects,1,NULL) OVER (ORDER BY LDS.FILTER_BY_COHORT_YN, LDS.COHORT_NAME, LDS.CUTOFF_FILTER_YN, LDS.TABLENAME)
+       WHEN tablename = 'Under 65'
+        THEN 1.0*TotalSubjects/LAG(TotalSubjects,2,NULL) OVER (ORDER BY LDS.FILTER_BY_COHORT_YN, LDS.COHORT_NAME, LDS.CUTOFF_FILTER_YN, LDS.TABLENAME)
+       END) as PercPopulation
+  , LDS.TotalSubjectsFemale
+  , LDS.TotalSubjectsMale
   , LDS.AverageFactCount
   , LDS.[RUNTIMEms]
   FROM [dbo].[loyalty_dev_summary] lds
-    JOIN [dbo].[loyalty_dev_summary] T 
-      ON T.COHORT_NAME = LDS.COHORT_NAME
-      AND T.SITE = LDS.SITE 
-      AND T.EXTRACT_DTTM = LDS.EXTRACT_DTTM 
-      AND T.LOOKBACK_YR = LDS.LOOKBACK_YR
-      AND T.GENDER_DENOMINATORS_YN = LDS.GENDER_DENOMINATORS_YN
-      AND T.CUTOFF_FILTER_YN = LDS.CUTOFF_FILTER_YN
-      AND T.Summary_Description = 'PercentOfSubjects'
-      AND T.tablename = 'All Patients'
   WHERE LDS.Summary_Description = 'PercentOfSubjects' 
     AND LDS.LOOKBACK_YR = @lookbackYears
     AND LDS.GENDER_DENOMINATORS_YN =  IIF(@gendered=0,'N','Y')

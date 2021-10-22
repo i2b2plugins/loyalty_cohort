@@ -781,11 +781,25 @@ RAISERROR(N'Charlson Stats - Rows: %d - Total Execution (ms): %d  - Step Runtime
 
 /* FINAL SUMMARIZATION OF RESULTS */
 /* clear out last run of lookback */
-DELETE FROM dbo.loyalty_dev_summary 
-WHERE COHORT_NAME IN (SELECT COHORT_NAME FROM @cohort_filter) 
-  AND LOOKBACK_YR = @lookbackYears
-  AND GENDER_DENOMINATORS_YN = IIF(@gendered=0,'N','Y')
-  AND [SITE]=@site
+IF (@filter_by_existing_cohort=1)
+BEGIN
+  DELETE FROM dbo.loyalty_dev_summary 
+  WHERE LOOKBACK_YR = @lookbackYears
+    AND GENDER_DENOMINATORS_YN = IIF(@gendered=0,'N','Y')
+    AND [SITE]=@site
+    AND FILTER_BY_COHORT_YN = 'Y'
+    AND cohort_name IN (SELECT COHORT_NAME FROM @cohort_filter)
+END
+
+IF (@filter_by_existing_cohort=0)
+BEGIN
+  DELETE FROM dbo.loyalty_dev_summary 
+  WHERE LOOKBACK_YR = @lookbackYears
+    AND GENDER_DENOMINATORS_YN = IIF(@gendered=0,'N','Y')
+    AND [SITE]=@site
+    AND FILTER_BY_COHORT_YN = 'N' 
+    AND COHORT_NAME = 'N/A'
+END
 
 /* FINAL SUMMARIZATION OF RESULTS */
 SET @STEPTTS = GETDATE()

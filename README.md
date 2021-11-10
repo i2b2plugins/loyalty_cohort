@@ -27,6 +27,8 @@
 3) We are collecting outputs of this script to compare heuristics. If participating, contact us for access and then paste the output of step 5 into the Google sheet here:
 https://docs.google.com/spreadsheets/d/1ubuRt_ffVcZiQgUdOmeMXxgjOdfkpQe2FNFyt0u2Un4/edit?usp=sharing
 
+4) The script also outputs patient level data in `loyalty_dev` and `loyalty_charlson_dev`. These cohorts are dependent on lookbackYears but not demographic_facts.
+
 ### Parameter description:
 * *site*: A short (3-character) identifier for your site.
 * *lookbackYears*: A number of years for lookback. The original algorithm used 1 year, but we have found 3- or 5-years are more accurate, because some preventitive care like PSA and Pap Smears do not occurr every year.

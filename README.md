@@ -14,9 +14,11 @@
 
 ### To install:
 1) Run ddl_xref_LoyaltyCode_paths.sql to create the xref_LoyaltyCode_paths table.
-2) Import the contents of xref_LoyaltyCode_paths.csv into the table, or run insert_xref_LoyaltyCode_paths.sql
-3) Run ddl_dml_xref_LoyaltyCohort_PSCoeff.sql to create and load the Predicted Score coefficients table.
-4) Run OPTIMIZATION_REFACTOR_V1.sql to create the usp_LoyaltyCohort_opt stored procedure.
+2) Run ddl_LU_CHARLSON.sql to create the LU_CHARLSON table.
+4) Import the contents of xref_LoyaltyCode_paths.csv into the table, or run insert_xref_LoyaltyCode_paths.sql
+5) Run insert_LU_CHARLSON.sql to populate the LU_CHARLSON table.
+6) Run ddl_dml_xref_LoyaltyCohort_PSCoeff.sql to create and load the Predicted Score coefficients table.
+7) Run OPTIMIZATION_REFACTOR_V1.sql to create the usp_LoyaltyCohort_opt stored procedure.
 
 ### To run:
 1) Execute the following statement on your database to compute the loyalty cohort. This should take about 10 minutes or less.

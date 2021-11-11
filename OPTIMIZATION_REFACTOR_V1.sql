@@ -1,13 +1,29 @@
-/*
-prepare user-defined type (table variable for cohort filtering) 
 
-DROP TYPE udt_CohortFilter
+--prepare user-defined type (table variable for cohort filtering) 
+
+IF OBJECT_ID(N'DBO.udt_CohortFilter') IS NOT NULL DROP TYPE udt_CohortFilter;
 
 CREATE TYPE udt_CohortFilter AS TABLE (PATIENT_NUM INT, COHORT_NAME VARCHAR(100))
 GO
+
+
+
+/* Implements a loyalty cohort algorithm with the same general design defined in 
+  "External Validation of an Algorithm to Identify Patients with High Data-Completeness in Electronic Health Records for Comparative Effectiveness Research" by Lin et al.
+Written primarily by Darren Henderson with contributions from: Jeff Klann, PhD; Andrew Cagan; Barbara Benoit
+
+Calculates 20 variables over the baseline period and computes an overall score, the highest scoring individuals are an approximation of those most likely present for future follow-up
+This script accepts an index_date and looks back n years previous to that date (baseline period). For consistency across sites, let us all use the index date of 2/1/2021
+
+To run, EXEC usp_LoyaltyCohort_opt @indexDate = '20210201', @site='STE', @lookbackYears=1,  @demographic_facts=0, @gendered=0, @filter_by_existing_cohort=0, @cohort_filter=@cfilter, @output=0
+This will create two tables on your db, loyalty_dev (line level data with variables and score presented for each patient) and loyalty_dev_summary (summary table).
+
+It is ok under the SHRINE IRB to export this: select * from loyalty_dev_summary where Summary_Description='PercentOfSubjects'
+It is percentages, a predictive score, and an obfuscated count of total patients.
+
+***** Standard i2b2 table naming conventions are used - Observation_fact, concept_dimension, patient_dimension.
+***** Follow the README located here for more information on installing and running: https://github.com/i2b2plugins/loyalty_cohort 
 */
-
-
 IF OBJECT_ID(N'DBO.usp_LoyaltyCohort_opt') IS NOT NULL DROP PROCEDURE DBO.usp_LoyaltyCohort_opt
 GO
 
@@ -51,6 +67,7 @@ IF OBJECT_ID(N'dbo.loyalty_dev_summary', N'U') IS NULL
     [SITE] VARCHAR(10) NOT NULL,
     [GENDER_DENOMINATORS_YN] char(1) NOT NULL,
     [CUTOFF_FILTER_YN] char(1) NOT NULL,
+    [FILTER_BY_COHORT_YN] char(1) NULL, -- bugfix 11/10/21
 	  [Summary_Description] varchar(20) NOT NULL,
 	  [tablename] [varchar](20) NULL,
 	  [Num_DX1] float NULL,
@@ -970,6 +987,13 @@ group by CAG.cohort_name, CAG.AGEGRP
 SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
 RAISERROR(N'Final Summary Table - Rows: %d - Total Execution (ms): %d - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
 
+-- Add obfuscated patient counts to the percent 11/10/21
+update s set TotalSubjects=s2.TotalSubjects + FLOOR(ABS(BINARY_CHECKSUM(NEWID())/2147483648.0)*(10*2+1)) - 10,
+  TotalSubjectsMale=s2.TotalSubjectsMale + FLOOR(ABS(BINARY_CHECKSUM(NEWID())/2147483648.0)*(10*2+1)) - 10,
+  TotalSubjectsFemale=s2.TotalSubjectsFemale + FLOOR(ABS(BINARY_CHECKSUM(NEWID())/2147483648.0)*(10*2+1)) - 10
+  from dbo.loyalty_dev_summary as s inner join dbo.loyalty_dev_summary as s2 on s.tablename=s2.tablename
+  where s.Summary_Description='PercentOfSubjects' and s2.Summary_Description='Patient Counts'
+
 UPDATE [dbo].[loyalty_dev_summary]
 SET RUNTIMEms = @ENDRUNTIMEms
 FROM [dbo].[loyalty_dev_summary] LDS
@@ -980,12 +1004,13 @@ FROM [dbo].[loyalty_dev_summary] LDS
     AND LDS.SITE = @site
     AND LDS.GENDER_DENOMINATORS_YN = IIF(@gendered=0,'N','Y')
 
--- jgk 8/4/21: Expose the cohort table for analytics. Keep in mind it is fairly large. 
-
 SET @STEPTTS = GETDATE()
 
+-- jgk 8/4/21: Expose the cohort tables for analytics. Keep in mind it is fairly large. 
 IF OBJECT_ID(N'DBO.loyalty_dev', N'U') IS NOT NULL DROP TABLE DBO.loyalty_dev;
-select * into DBO.loyalty_dev from #cohort_agegrp;
+select @lookbackYears as lookbackYears, c.* into DBO.loyalty_dev from #cohort_agegrp c;
+IF OBJECT_ID(N'DBO.loyalty_charlson_dev', N'U') IS NOT NULL DROP TABLE DBO.loyalty_charlson_dev;
+select @lookbackYears as lookbackYears, c.* into DBO.loyalty_charlson_dev from #COHORT_CHARLSON c;
 
 SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
 RAISERROR(N'Final Summary Table - Rows: %d - Total Execution (ms): %d - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;

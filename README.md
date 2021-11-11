@@ -16,7 +16,7 @@
 1) Run ddl_xref_LoyaltyCode_paths.sql to create the xref_LoyaltyCode_paths table.
 2) Run ddl_LU_CHARLSON.sql to create the LU_CHARLSON table.
 4) Import the contents of xref_LoyaltyCode_paths.csv into the table, or run insert_xref_LoyaltyCode_paths.sql
-5) Run insert_LU_CHARLSON.sql to populate the LU_CHARLSON table.
+5) Run insert_LU_CHARLSON.sql to populate the LU_CHARLSON table. Replace the prefix in the code pattern column if your data do not use ICD10CM: and ICD9CM:
 6) Run ddl_dml_xref_LoyaltyCohort_PSCoeff.sql to create and load the Predicted Score coefficients table.
 7) Run OPTIMIZATION_REFACTOR_V1.sql to create the usp_LoyaltyCohort_opt stored procedure.
 

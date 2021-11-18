@@ -1,6 +1,8 @@
 # Loyalty Cohort Algorithm
 ### Implements the loyalty cohort algorithm defined in [*External Validation of an Algorithm to Identify Patients with High Data-Completeness in Electronic Health Records for Comparative Effectiveness Research*](https://pubmed.ncbi.nlm.nih.gov/32099479/) by Lin et al.
-(See [appendix table S1](https://www.dovepress.com/get_supplementary_file.php?f=232540.docx) for the regression equation used to calculate the score.)
+
+#### See [appendix table S1](https://www.dovepress.com/get_supplementary_file.php?f=232540.docx) for the regression equation used to calculate the score.
+#### See [algorithm outline](https://github.com/i2b2plugins/loyalty_cohort/blob/main/ALGORITHM_README.md) for more details on the algorithm.
 
 ## Notes:
 * This only runs on MSSQL right now. (Oracle refactor underway)

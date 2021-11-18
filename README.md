@@ -1,5 +1,8 @@
 # Loyalty Cohort Algorithm
-### Implements the loyalty cohort algorithm defined in *External Validation of an Algorithm to Identify Patients with High Data-Completeness in Electronic Health Records for Comparative Effectiveness Research* by Lin et al.
+### Implements the loyalty cohort algorithm defined in [*External Validation of an Algorithm to Identify Patients with High Data-Completeness in Electronic Health Records for Comparative Effectiveness Research*](https://pubmed.ncbi.nlm.nih.gov/32099479/) by Lin et al.
+
+#### See [appendix table S1](https://www.dovepress.com/get_supplementary_file.php?f=232540.docx) for the regression equation used to calculate the score.
+#### See [algorithm outline](https://github.com/i2b2plugins/loyalty_cohort/blob/main/ALGORITHM_README.md) for more details on the algorithm.
 
 ## Notes:
 * This only runs on MSSQL right now. (Oracle refactor underway)
@@ -16,7 +19,7 @@
 1) Run ddl_xref_LoyaltyCode_paths.sql to create the xref_LoyaltyCode_paths table.
 2) Run ddl_LU_CHARLSON.sql to create the LU_CHARLSON table.
 4) Import the contents of xref_LoyaltyCode_paths.csv into the table, or run insert_xref_LoyaltyCode_paths.sql
-5) Run insert_LU_CHARLSON.sql to populate the LU_CHARLSON table.
+5) Run insert_LU_CHARLSON.sql to populate the LU_CHARLSON table. Replace the prefix in the code pattern column if your data do not use ICD10CM: and ICD9CM:
 6) Run ddl_dml_xref_LoyaltyCohort_PSCoeff.sql to create and load the Predicted Score coefficients table.
 7) Run OPTIMIZATION_REFACTOR_V1.sql to create the usp_LoyaltyCohort_opt stored procedure.
 

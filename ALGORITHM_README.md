@@ -8,7 +8,7 @@ Implements a loyalty cohort algorithm with the same general design defined in
 
 ## Outline of algorithm
 
-1. Select all patients with a non-demographic fact between 1/1/2012 and the specified index date.
+1. Select all patients with **any** non-demographic fact that is listed in the concept_dimension between 1/1/2012 and the specified index date.
 
 2. Determine which patients had visits of the required types between the index date and the index date minus the specified number of lookback years.
 

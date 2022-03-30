@@ -1,9 +1,14 @@
 
 --prepare user-defined type (table variable for cohort filtering) 
+-- the drop procedure must happen first just in case, because the drop/create type will fail if it's still referenced by an existing object
+IF OBJECT_ID(N'DBO.usp_LoyaltyCohort_opt') IS NOT NULL DROP PROCEDURE DBO.usp_LoyaltyCohort_opt
+GO
 
---CREATE TYPE udt_CohortFilter AS TABLE (PATIENT_NUM INT, COHORT_NAME VARCHAR(100))
---GO
+DROP TYPE udt_CohortFilter;
+GO
 
+CREATE TYPE udt_CohortFilter AS TABLE (PATIENT_NUM INT, COHORT_NAME VARCHAR(100), INDEX_DT DATETIME)
+GO
 
 /* Implements a loyalty cohort algorithm with the same general design defined in 
   "External Validation of an Algorithm to Identify Patients with High Data-Completeness in Electronic Health Records for Comparative Effectiveness Research" by Lin et al.
@@ -21,8 +26,6 @@ It is percentages, a predictive score, and an obfuscated count of total patients
 ***** Standard i2b2 table naming conventions are used - Observation_fact, concept_dimension, patient_dimension.
 ***** Follow the README located here for more information on installing and running: https://github.com/i2b2plugins/loyalty_cohort 
 */
-IF OBJECT_ID(N'DBO.usp_LoyaltyCohort_opt') IS NOT NULL DROP PROCEDURE DBO.usp_LoyaltyCohort_opt
-GO
 
 CREATE PROC [dbo].[usp_LoyaltyCohort_opt]
      @indexDate datetime
@@ -32,6 +35,7 @@ CREATE PROC [dbo].[usp_LoyaltyCohort_opt]
     ,@filter_by_existing_cohort bit = 0 /* DEFAULT FALSE -- IF YOU WANT TO FILTER THE LOYALTY COHORT BY AN EXISTING COHORT PASS THE @cohort_filter parameter a table variable of type udt_CohortFilter */
     ,@cohort_filter udt_CohortFilter READONLY /* Table variable to filter output by an existing cohort */
     ,@output bit = 1 /* DEFAULT TO SHOW FINAL OUTPUT */
+    ,@indexDate_override bit = 0
 AS
 
 /* 
@@ -99,10 +103,19 @@ IF OBJECT_ID(N'dbo.loyalty_dev_summary', N'U') IS NULL
     [RUNTIMEms] int NULL
   )
 
+/* CONVERT TABLE VARIABLE TO TEMP TABLE AND INDEX */
+IF OBJECT_ID(N'tempdb..#COHORT_FILTER',N'U') IS NOT NULL DROP TABLE #COHORT_FILTER;
+SELECT * INTO #COHORT_FILTER FROM @cohort_filter;
+CREATE CLUSTERED INDEX CIDX_CF ON #COHORT_FILTER (PATIENT_NUM, INDEX_DT, COHORT_NAME);
+
 /* ENSURE TEMP IS CLEAR FROM PREVIOUS RUNS */
-IF OBJECT_ID(N'tempdb..#DEMCONCEPT', N'U') IS NOT NULL DROP TABLE #DEMCONCEPT;
+IF OBJECT_ID(N'tempdb..#MULTIVISIT_STG', N'U') IS NOT NULL DROP TABLE #MULTIVISIT_STG;
 IF OBJECT_ID(N'tempdb..#INLCPAT_MULTIVISIT', N'U') IS NOT NULL DROP TABLE #INLCPAT_MULTIVISIT;
 IF OBJECT_ID(N'tempdb..#INCLPAT', N'U') IS NOT NULL DROP TABLE #INCLPAT;
+IF OBJECT_ID(N'tempdb..#LASTVISIT', N'U') IS NOT NULL DROP TABLE #LASTVISIT;
+IF OBJECT_ID(N'tempdb..#LASTVISIT11', N'U') IS NOT NULL DROP TABLE #LASTVISIT11;
+IF OBJECT_ID(N'tempdb..#LASTVISIT01', N'U') IS NOT NULL DROP TABLE #LASTVISIT01;
+IF OBJECT_ID(N'tempdb..#LASTVISIT00', N'U') IS NOT NULL DROP TABLE #LASTVISIT00;
 IF OBJECT_ID(N'tempdb..#cohort', N'U') IS NOT NULL DROP TABLE #cohort;
 IF OBJECT_ID(N'tempdb..#MDVISIT_OBSERVATIONS', N'U') IS NOT NULL DROP TABLE #MDVISIT_OBSERVATIONS;
 IF OBJECT_ID(N'tempdb..#ET_AL_OBSERVATIONS', N'U') IS NOT NULL DROP TABLE #ET_AL_OBSERVATIONS;
@@ -125,19 +138,25 @@ DECLARE @ROWS INT
 /* include only patients with non-demographic concepts after 20120101 
 */
 
-  RAISERROR(N'Starting #INCLPAT phase.', 1, 1) with nowait;
+  SET @STEPTTS = GETDATE()
+  RAISERROR(N'Starting Ephemeral Patient filter (#INCLPAT_MULTIVISIT)', 1, 1) with nowait;
 
+  CREATE TABLE #MULTIVISIT_STG (PATIENT_NUM INT, ENCOUNTER_NUM INT, START_DATE DATE, END_DATE DATE, CONSTRAINT PKMVSTG PRIMARY KEY(PATIENT_NUM, ENCOUNTER_NUM));
+  
   /* NEW MULTI-VISIT FILTER - 20220228 DWH */
-  ;WITH CTE_MULTVISIT AS (
+  INSERT INTO #MULTIVISIT_STG WITH(TABLOCK)(PATIENT_NUM,ENCOUNTER_NUM,START_DATE,END_DATE)
   SELECT PATIENT_NUM, ENCOUNTER_NUM, CONVERT(DATE,START_DATE) START_DATE, CONVERT(DATE,END_DATE) END_DATE 
   /* CONVERTING TO DATE TO AGGRESSIVELY DROP OUT ADMIN-LIKE ENCOUNTERS ON SAME DAY AND TREAT THEM AS OVERLAPPING */ 
   FROM DBO.VISIT_DIMENSION
-  WHERE PATIENT_NUM NOT IN (SELECT PATIENT_NUM FROM DBO.VISIT_DIMENSION GROUP BY PATIENT_NUM HAVING COUNT(DISTINCT ENCOUNTER_NUM) = 1) /* EXCLUDES EPHEMERAL ONE-VISIT PATIENTS */
-  )
+  WHERE PATIENT_NUM NOT IN (SELECT PATIENT_NUM FROM DBO.VISIT_DIMENSION GROUP BY PATIENT_NUM HAVING COUNT(DISTINCT ENCOUNTER_NUM) = 1); /* EXCLUDES EPHEMERAL ONE-VISIT PATIENTS */
+    
+  CREATE TABLE #INCLPAT_MULTIVISIT (PATIENT_NUM INT);
+  CREATE CLUSTERED INDEX CIDXPN ON #INCLPAT_MULTIVISIT(PATIENT_NUM);
+
+  INSERT INTO #INCLPAT_MULTIVISIT WITH(TABLOCK)(PATIENT_NUM)
   SELECT DISTINCT A.PATIENT_NUM
-  INTO #INLCPAT_MULTIVISIT
-  FROM CTE_MULTVISIT A
-    LEFT JOIN CTE_MULTVISIT B
+  FROM #MULTIVISIT_STG A
+    LEFT JOIN #MULTIVISIT_STG B
       ON A.PATIENT_NUM = B.PATIENT_NUM
       AND A.ENCOUNTER_NUM != B.ENCOUNTER_NUM
       AND (A.START_DATE <= B.END_DATE AND A.END_DATE >= B.START_DATE) /* VISIT DATES OVERLAP IN SOME WAY */
@@ -149,70 +168,75 @@ DECLARE @ROWS INT
      SO BY THIS STEP, IF ENCOUNTERS THAT DO OVERLAP ARE DROPPED, THERE IS STILL AT LEAST ONE STANDALONE ENCOUNTER IN ADDITION
      TO THOSE OVERLAPPED ENCOUNTERS - THUS AT MINIMUM >=3 ENCOUNTERS IN THE EHR. 
   */
-
-  /* EXTRACT DEMOGRAPHIC CONCEPTS */
-  SELECT DISTINCT CONCEPT_CD
-    , SUBSTRING(CONCEPT_CD,1,CHARINDEX(':',CONCEPT_CD)-1) AS CONCEPT_PREFIX 
-  INTO #DEMCONCEPT
-  FROM CONCEPT_DIMENSION
-  WHERE CONCEPT_PATH LIKE '\ACT\Demographics%'
-    AND CONCEPT_CD != ''
-  
+  SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
+  RAISERROR(N'Build #INCLPAT_MULTIVISIT - Rows: %d - Total Execution (ms): %d - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
+ 
+  /* At least one non-demographic fact since 2012 */
   SET @STEPTTS = GETDATE()
+  RAISERROR(N'Starting #INCLPAT phase.', 1, 1) with nowait;
 
   CREATE TABLE #INCLPAT (PATIENT_NUM INT)
   
-  IF(@filter_by_existing_cohort=0)
-    INSERT INTO #INCLPAT (PATIENT_NUM)
-    SELECT DISTINCT PATIENT_NUM
-    /* distinct list of patients left over from except operation would be patient-concept_cd key pairs for any other fact type */
-    FROM (
-    /* all patient-concept_cd key pairs between 2012 and index */
-    SELECT F.PATIENT_NUM, F.CONCEPT_CD
-    FROM DBO.OBSERVATION_FACT F
-      JOIN CONCEPT_DIMENSION CD
-        ON F.CONCEPT_CD = CD.CONCEPT_CD
-      JOIN TABLE_ACCESS TA 
-        ON CD.CONCEPT_PATH LIKE TA.C_DIMCODE+'%'
-        AND (TA.C_NAME LIKE 'ACT%') /* ACT ONTOLOGY ONLY -- EXCLUDE ANY LOCAL EXTRA ONTOLOGIES A SITE MIGHT BE MANAGING */
-    WHERE F.START_DATE >= CAST('20120101' AS DATETIME) AND F.START_DATE < @indexDate
-    EXCEPT
-    /* exclude patient-concept_cd demographic pairs */
-    SELECT PATIENT_NUM, F.CONCEPT_CD
-    FROM DBO.OBSERVATION_FACT F
-      JOIN #DEMCONCEPT D
-        ON F.CONCEPT_CD = D.CONCEPT_CD
-    WHERE F.START_DATE >= CAST('20120101' AS DATETIME) AND F.START_DATE < @indexDate
-    )OFMINUSDEM
-    INTERSECT
-    (SELECT PATIENT_NUM FROM #INLCPAT_MULTIVISIT)
-  ELSE
-    INSERT INTO #INCLPAT (PATIENT_NUM)
-    SELECT DISTINCT PATIENT_NUM
-    /* distinct list of patients left over from except operation would be patient-concept_cd key pairs for any other fact type */
-    FROM (
-    /* all patient-concept_cd key pairs between 2012 and index */
-    SELECT F.PATIENT_NUM, F.CONCEPT_CD
-    FROM DBO.OBSERVATION_FACT F
-      JOIN CONCEPT_DIMENSION CD
-        ON F.CONCEPT_CD = CD.CONCEPT_CD
-      JOIN TABLE_ACCESS TA 
-        ON CD.CONCEPT_PATH LIKE TA.C_DIMCODE+'%'
-        AND (TA.C_NAME LIKE 'ACT%') /* ACT ONTOLOGY ONLY -- EXCLUDE ANY LOCAL EXTRA ONTOLOGIES A SITE MIGHT BE MANAGING */
-    WHERE F.START_DATE >= CAST('20120101' AS DATETIME) AND F.START_DATE < @indexDate
-    EXCEPT
-    /* exclude patient-concept_cd demographic pairs */
-    SELECT PATIENT_NUM, F.CONCEPT_CD
-    FROM DBO.OBSERVATION_FACT F
-      JOIN #DEMCONCEPT D
-        ON F.CONCEPT_CD = D.CONCEPT_CD
-    WHERE F.START_DATE >= CAST('20120101' AS DATETIME) AND F.START_DATE < @indexDate
-    )OFMINUSDEM
-    INTERSECT 
-    (SELECT PATIENT_NUM FROM @cohort_filter)
-    INTERSECT
-    (SELECT PATIENT_NUM FROM #INLCPAT_MULTIVISIT)
+  IF(@indexDate_OVERRIDE=0)
+  BEGIN
+    IF(@filter_by_existing_cohort=0)
+      INSERT INTO #INCLPAT (PATIENT_NUM)
+      SELECT DISTINCT PATIENT_NUM FROM (
+      SELECT DISTINCT F.PATIENT_NUM
+      FROM TABLE_ACCESS TA
+        JOIN CONCEPT_DIMENSION CD
+          ON CD.CONCEPT_PATH LIKE CONCAT(TA.C_DIMCODE,'%')
+          AND CD.CONCEPT_CD != ''
+        JOIN OBSERVATION_FACT F
+          ON CD.CONCEPT_CD = F.CONCEPT_CD
+      WHERE F.START_DATE >= CAST('20120101' AS DATETIME) AND F.START_DATE < @indexDate /* FILTER BY STATIC @indexDate passed to procedure */
+        AND TA.C_TABLE_NAME NOT IN ('ACT_DEM_V4')
+      )NONDEM
+      INTERSECT
+      (SELECT PATIENT_NUM FROM #INCLPAT_MULTIVISIT)
+    ELSE /* @filter_by_existing_cohort=1 */
+      INSERT INTO #INCLPAT (PATIENT_NUM)
+      SELECT DISTINCT PATIENT_NUM FROM (
+      SELECT DISTINCT F.PATIENT_NUM
+      FROM TABLE_ACCESS TA
+        JOIN CONCEPT_DIMENSION CD
+          ON CD.CONCEPT_PATH LIKE CONCAT(TA.C_DIMCODE,'%')
+          AND CD.CONCEPT_CD != ''
+        JOIN OBSERVATION_FACT F
+          ON CD.CONCEPT_CD = F.CONCEPT_CD
+        JOIN #COHORT_FILTER CF /* FILTER BY COHORT_FILTER */
+          ON F.PATIENT_NUM = CF.PATIENT_NUM
+      WHERE F.START_DATE >= CAST('20120101' AS DATETIME) AND F.START_DATE < @indexDate /* FILTER BY STATIC @indexDate passed to procedure */
+        AND TA.C_TABLE_NAME NOT IN ('ACT_DEM_V4')
+      )NONDEM
+      INTERSECT
+      (SELECT PATIENT_NUM FROM #INCLPAT_MULTIVISIT)
+  END
 
+  IF(@indexDate_OVERRIDE=1) /* FILTER BY PATIENT ASSOCIATED INDEX_DT IN COHORT_FILTER */
+  BEGIN
+    IF(@filter_by_existing_cohort=0)
+      BEGIN
+        RAISERROR(N'The parameters filter_by_existing_cohort=0 and indexDate_OVERRIDE = 1, must not be set in this manner. If overriding a static indexDate, a cohort filter must be used.',1,1) WITH NOWAIT;
+      END
+    ELSE /* @filter_by_existing_cohort=1 */
+      INSERT INTO #INCLPAT (PATIENT_NUM)
+      SELECT DISTINCT PATIENT_NUM FROM (
+      SELECT F.PATIENT_NUM
+      FROM TABLE_ACCESS TA
+        JOIN CONCEPT_DIMENSION CD
+          ON CD.CONCEPT_PATH LIKE CONCAT(TA.C_DIMCODE,'%')
+          AND CD.CONCEPT_CD != ''
+        JOIN OBSERVATION_FACT F
+          ON CD.CONCEPT_CD = F.CONCEPT_CD
+        JOIN #COHORT_FILTER CF
+          ON F.PATIENT_NUM = CF.PATIENT_NUM
+      WHERE F.START_DATE >= CAST('20120101' AS DATETIME) AND F.START_DATE < CF.INDEX_DT
+        AND TA.C_TABLE_NAME NOT IN ('ACT_DEM_V4')
+      )NONDEM
+      INTERSECT
+      (SELECT PATIENT_NUM FROM #INCLPAT_MULTIVISIT)
+  END
   
   SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
   RAISERROR(N'Build #INCLPAT - Rows: %d - Total Execution (ms): %d - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
@@ -247,6 +271,7 @@ MDVisit_pname3 bit not null DEFAULT 0,
 Routine_Care_2 bit not null DEFAULT 0,
 Predicted_score FLOAT not null DEFAULT -0.010, /* default is intercept */
 LAST_VISIT DATE NULL,
+INDEX_DATE DATETIME NULL,
 CONSTRAINT PKCOHORT PRIMARY KEY (cohort_name, patient_num)
 )
 
@@ -254,42 +279,120 @@ CONSTRAINT PKCOHORT PRIMARY KEY (cohort_name, patient_num)
 /* EXTRACT COHORT AND VISIT TYPE FLAGS */
 SET @STEPTTS = GETDATE()
 
+CREATE TABLE #LASTVISIT11(PATIENT_NUM INT, LAST_VISIT DATE);
+CREATE TABLE #LASTVISIT01(PATIENT_NUM INT, LAST_VISIT DATE);
+CREATE TABLE #LASTVISIT00(PATIENT_NUM INT, LAST_VISIT DATE);
+
+/* GET #LASTVISIT */
+if(@indexDate_override=1 and @filter_by_existing_cohort=0)
+  RAISERROR(N'The parameters filter_by_existing_cohort=0 and indexDate_OVERRIDE = 1, must not be set in this manner. If overriding a static indexDate, a cohort filter must be used.',1,1) WITH NOWAIT;
+
+if(@indexDate_override=1 and @filter_by_existing_cohort=1)
+  INSERT INTO #LASTVISIT11 WITH (TABLOCK)(PATIENT_NUM,LAST_VISIT)
+  SELECT V.PATIENT_NUM, MAX(CONVERT(DATE,START_DATE)) LAST_VISIT 
+  FROM VISIT_DIMENSION V
+    JOIN #INCLPAT P
+      ON V.PATIENT_NUM = P.PATIENT_NUM
+    JOIN #COHORT_FILTER CF
+      ON V.PATIENT_NUM = CF.PATIENT_NUM
+      AND V.START_DATE <= CF.INDEX_DT
+  GROUP BY V.PATIENT_NUM;
+
+if(@indexDate_override=0 and @filter_by_existing_cohort=1)
+  INSERT INTO #LASTVISIT01 WITH (TABLOCK)(PATIENT_NUM,LAST_VISIT)
+  SELECT V.PATIENT_NUM, MAX(CONVERT(DATE,START_DATE)) LAST_VISIT
+  FROM VISIT_DIMENSION V
+    JOIN #INCLPAT P
+      ON V.PATIENT_NUM = P.PATIENT_NUM
+    JOIN #COHORT_FILTER CF
+      ON V.PATIENT_NUM = CF.PATIENT_NUM
+  WHERE V.START_DATE < @indexDate
+  GROUP BY V.PATIENT_NUM;
+
+if(@indexDate_override=0 and @filter_by_existing_cohort=0)
+  INSERT INTO #LASTVISIT00 WITH (TABLOCK)(PATIENT_NUM,LAST_VISIT)
+  SELECT V.PATIENT_NUM, MAX(CONVERT(DATE,START_DATE)) LAST_VISIT
+  FROM VISIT_DIMENSION V
+    JOIN #INCLPAT P
+      ON V.PATIENT_NUM = P.PATIENT_NUM
+  WHERE V.START_DATE < @indexDate
+  GROUP BY V.PATIENT_NUM;
+  
+SELECT PATIENT_NUM, LAST_VISIT INTO #LASTVISIT FROM (
+SELECT PATIENT_NUM, LAST_VISIT FROM #LASTVISIT11 UNION ALL
+SELECT PATIENT_NUM, LAST_VISIT FROM #LASTVISIT01 UNION ALL
+SELECT PATIENT_NUM, LAST_VISIT FROM #LASTVISIT00
+)LV
+
 IF(@filter_by_existing_cohort=1)
 BEGIN
-  INSERT INTO #COHORT (COHORT_NAME, PATIENT_NUM, INP1_OPT1_Visit, OPT2_Visit, ED_Visit, LAST_VISIT)
-  SELECT COHORT_NAME, PATIENT_NUM
-    , MAX(CASE WHEN Feature_name = 'INP1_OPT1_Visit' THEN 1 ELSE 0 END) AS INP1_OPT1_VISIT
-    , MAX(CASE WHEN Feature_name = 'OPT2_Visit' AND N >= 2 THEN 1 ELSE 0 END) AS OPT2_Visit
-    , MAX(CASE WHEN Feature_name = 'ED_Visit' THEN 1 ELSE 0 END) AS ED_Visit
-    , LAST_VISIT
-  FROM(
-  SELECT CF.COHORT_NAME, INP.PATIENT_NUM, P.Feature_name
-    , COUNT(DISTINCT CONVERT(DATE, V.START_DATE)) N
-    , LV.LAST_VISIT
-  FROM @cohort_filter CF
-  JOIN #INCLPAT INP
-    ON CF.PATIENT_NUM = INP.PATIENT_NUM
-  LEFT JOIN VISIT_DIMENSION V
-    ON CF.PATIENT_NUM = V.PATIENT_NUM
-    AND V.START_DATE >= DATEADD(YY,-@lookbackYears,@indexDate) AND V.START_DATE < @indexDate
-    JOIN CONCEPT_DIMENSION CDV
-      ON V.INOUT_CD = CDV.CONCEPT_CD
-    JOIN xref_LoyaltyCode_paths P
-      ON P.code_type = 'VISIT'
-      AND CDV.CONCEPT_PATH LIKE P.ACT_PATH+'%'
-    CROSS APPLY (SELECT MAX(CONVERT(DATE, START_DATE)) AS LAST_VISIT FROM VISIT_DIMENSION WHERE PATIENT_NUM = CF.PATIENT_NUM) LV
-  --WHERE CF.PATIENT_NUM NOT IN (SELECT PATIENT_NUM FROM PATIENT_DIMENSION WHERE DEATH_DATE IS NOT NULL) /* EXCLUDE DECEASED */
-  GROUP BY CF.COHORT_NAME, INP.PATIENT_NUM, P.Feature_name, LV.LAST_VISIT
-  )V
-  GROUP BY COHORT_NAME, PATIENT_NUM, LAST_VISIT;
+  IF(@indexDate_OVERRIDE=0)
+    BEGIN
+      INSERT INTO #COHORT (COHORT_NAME, PATIENT_NUM, INP1_OPT1_Visit, OPT2_Visit, ED_Visit, LAST_VISIT)
+      SELECT COHORT_NAME, PATIENT_NUM
+        , MAX(CASE WHEN Feature_name = 'INP1_OPT1_Visit' THEN 1 ELSE 0 END) AS INP1_OPT1_VISIT
+        , MAX(CASE WHEN Feature_name = 'OPT2_Visit' AND N >= 2 THEN 1 ELSE 0 END) AS OPT2_Visit
+        , MAX(CASE WHEN Feature_name = 'ED_Visit' THEN 1 ELSE 0 END) AS ED_Visit
+        , LAST_VISIT
+      FROM(
+      SELECT CF.COHORT_NAME, INP.PATIENT_NUM, P.Feature_name
+        , COUNT(DISTINCT CONVERT(DATE, V.START_DATE)) N
+        , LV.LAST_VISIT
+      FROM #COHORT_FILTER CF
+      JOIN #INCLPAT INP
+        ON CF.PATIENT_NUM = INP.PATIENT_NUM
+      JOIN #LASTVISIT LV
+        ON CF.PATIENT_NUM = LV.PATIENT_NUM
+      LEFT JOIN VISIT_DIMENSION V
+        ON CF.PATIENT_NUM = V.PATIENT_NUM
+        AND V.START_DATE >= DATEADD(YY,-@lookbackYears,@indexDate) AND V.START_DATE < @indexDate
+      JOIN CONCEPT_DIMENSION CDV
+        ON V.INOUT_CD = CDV.CONCEPT_CD
+      JOIN xref_LoyaltyCode_paths P
+        ON P.code_type = 'VISIT'
+        AND CDV.CONCEPT_PATH LIKE P.ACT_PATH+'%'
+      GROUP BY CF.COHORT_NAME, INP.PATIENT_NUM, P.Feature_name, LV.LAST_VISIT
+      )V
+      GROUP BY COHORT_NAME, PATIENT_NUM, LAST_VISIT;
+    END
+  ELSE /* @indexDate_override=1 */
+    BEGIN
+      INSERT INTO #COHORT (COHORT_NAME, PATIENT_NUM, INP1_OPT1_Visit, OPT2_Visit, ED_Visit, LAST_VISIT)
+      SELECT COHORT_NAME, PATIENT_NUM
+        , MAX(CASE WHEN Feature_name = 'INP1_OPT1_Visit' THEN 1 ELSE 0 END) AS INP1_OPT1_VISIT
+        , MAX(CASE WHEN Feature_name = 'OPT2_Visit' AND N >= 2 THEN 1 ELSE 0 END) AS OPT2_Visit
+        , MAX(CASE WHEN Feature_name = 'ED_Visit' THEN 1 ELSE 0 END) AS ED_Visit
+        , LAST_VISIT
+      FROM(
+      SELECT CF.COHORT_NAME, INP.PATIENT_NUM, P.Feature_name
+        , COUNT(DISTINCT CONVERT(DATE, V.START_DATE)) N
+        , LV.LAST_VISIT
+      FROM #COHORT_FILTER CF
+      JOIN #INCLPAT INP
+        ON CF.PATIENT_NUM = INP.PATIENT_NUM
+      JOIN #LASTVISIT LV
+        ON CF.PATIENT_NUM = LV.PATIENT_NUM
+      LEFT JOIN VISIT_DIMENSION V
+        ON CF.PATIENT_NUM = V.PATIENT_NUM
+        AND V.START_DATE >= DATEADD(YY,-@lookbackYears,@indexDate) AND V.START_DATE < CF.INDEX_DT
+      JOIN CONCEPT_DIMENSION CDV
+        ON V.INOUT_CD = CDV.CONCEPT_CD
+      JOIN xref_LoyaltyCode_paths P
+        ON P.code_type = 'VISIT'
+        AND CDV.CONCEPT_PATH LIKE P.ACT_PATH+'%'
+      GROUP BY CF.COHORT_NAME, INP.PATIENT_NUM, P.Feature_name, LV.LAST_VISIT
+      )V
+      GROUP BY COHORT_NAME, PATIENT_NUM, LAST_VISIT;
+    END
 
   /* INCLUDE PATIENTS THAT HAD A FACT SINCE 2012 (#INCLPAT) BUT DIDN'T FIND A VISIT IN THE LOOKBACK PERIOD */
   INSERT INTO #cohort (cohort_name, patient_num, INP1_OPT1_Visit, OPT2_Visit, ED_Visit, LAST_VISIT)
-  SELECT CF.COHORT_NAME, INP.PATIENT_NUM, 0, 0, 0, LV.LAST_VISIT
+  SELECT DISTINCT CF.COHORT_NAME, INP.PATIENT_NUM, 0, 0, 0, LV.LAST_VISIT
     FROM #INCLPAT INP
       JOIN @cohort_filter CF
         ON INP.PATIENT_NUM = CF.PATIENT_NUM
-      CROSS APPLY (SELECT MAX(CONVERT(DATE, START_DATE)) AS LAST_VISIT FROM VISIT_DIMENSION WHERE PATIENT_NUM = INP.PATIENT_NUM) LV
+      JOIN #LASTVISIT LV
+        ON CF.PATIENT_NUM = LV.PATIENT_NUM
   WHERE INP.PATIENT_NUM NOT IN (SELECT PATIENT_NUM FROM #cohort);
 
 
@@ -297,6 +400,12 @@ END
 
 IF(@filter_by_existing_cohort=0)
 BEGIN
+  IF(@indexdate_override=1)
+  BEGIN
+    RAISERROR(N'The parameters filter_by_existing_cohort=0 and indexDate_OVERRIDE = 1, must not be set in this manner. If overriding a static indexDate, a cohort filter must be used.',1,1) WITH NOWAIT
+  END
+  ELSE /* @indexdate_override=0 */
+  BEGIN
     INSERT INTO #COHORT (COHORT_NAME, PATIENT_NUM, INP1_OPT1_Visit, OPT2_Visit, ED_Visit, LAST_VISIT)
     SELECT 'N/A' AS COHORT_NAME, PATIENT_NUM
       , MAX(CASE WHEN Feature_name = 'INP1_OPT1_Visit' THEN 1 ELSE 0 END) AS INP1_OPT1_VISIT
@@ -308,6 +417,8 @@ BEGIN
       , COUNT(DISTINCT CONVERT(DATE, V.START_DATE)) N
       , LV.LAST_VISIT
     FROM #INCLPAT INP
+    JOIN #LASTVISIT LV
+      ON INP.PATIENT_NUM = LV.PATIENT_NUM
     LEFT JOIN VISIT_DIMENSION V
       ON INP.PATIENT_NUM = V.PATIENT_NUM
         AND V.START_DATE >= DATEADD(YY,-@lookbackYears,@indexDate) AND V.START_DATE < @indexDate
@@ -316,8 +427,6 @@ BEGIN
       JOIN xref_LoyaltyCode_paths P
         ON P.code_type = 'VISIT'
         AND CDV.CONCEPT_PATH LIKE P.ACT_PATH+'%'
-    CROSS APPLY (SELECT MAX(CONVERT(DATE, START_DATE)) AS LAST_VISIT FROM VISIT_DIMENSION WHERE PATIENT_NUM = INP.PATIENT_NUM) LV
-    --WHERE CF.PATIENT_NUM NOT IN (SELECT PATIENT_NUM FROM PATIENT_DIMENSION WHERE DEATH_DATE IS NOT NULL) /* EXCLUDE DECEASED */
     GROUP BY INP.PATIENT_NUM, P.Feature_name, LV.LAST_VISIT
     )V
     GROUP BY PATIENT_NUM, LAST_VISIT;
@@ -328,14 +437,30 @@ BEGIN
     FROM #INCLPAT INP
       CROSS APPLY (SELECT MAX(CONVERT(DATE, START_DATE)) AS LAST_VISIT FROM VISIT_DIMENSION WHERE PATIENT_NUM = INP.PATIENT_NUM) LV
     WHERE INP.PATIENT_NUM NOT IN (SELECT PATIENT_NUM FROM #cohort);
-
+  END
 END
 
-UPDATE #COHORT
-SET SEX = REPLACE(P.SEX_CD,'DEM|SEX:','')
-  , AGE = FLOOR(DATEDIFF(DD,P.BIRTH_DATE,@indexDate)/365.25)
-FROM #COHORT C, PATIENT_DIMENSION P
-WHERE C.PATIENT_NUM = P.PATIENT_NUM
+IF(@indexDate_override=0)
+  UPDATE #COHORT
+  SET SEX = REPLACE(P.SEX_CD,'DEM|SEX:','')
+    , AGE = FLOOR(DATEDIFF(DD,P.BIRTH_DATE,@indexDate)/365.25)
+  FROM #COHORT C, PATIENT_DIMENSION P
+  WHERE C.PATIENT_NUM = P.PATIENT_NUM
+
+IF(@indexDate_override=1 and @filter_by_existing_cohort=1)
+  UPDATE #COHORT
+  SET SEX = REPLACE(P.SEX_CD,'DEM|SEX:','')
+    , AGE = FLOOR(DATEDIFF(DD,P.BIRTH_DATE,CF.INDEX_DT)/365.25)
+  FROM #COHORT C, PATIENT_DIMENSION P, #COHORT_FILTER CF
+  WHERE C.PATIENT_NUM = P.PATIENT_NUM AND C.patient_num = CF.PATIENT_NUM
+
+IF(@indexDate_OVERRIDE=1)
+BEGIN
+  UPDATE #COHORT SET INDEX_DATE = B.INDEX_DT FROM #COHORT A JOIN #COHORT_FILTER B ON A.PATIENT_NUM = B.PATIENT_NUM AND A.COHORT_NAME = B.COHORT_NAME;
+
+  SELECT @ROWS=@@ROWCOUNT;
+  RAISERROR(N'Adding INDEX_DT TO COHORT :: @indexDate_OVERRIDE=1 - Rows: %d', 1, 1, @ROWS) with nowait;
+END
 
 SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
 RAISERROR(N'Cohort and Visit Type variables - Rows: %d - Total Execution (ms): %d - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
@@ -352,135 +477,283 @@ IF @ROWS > 0
 
 /* NEW COHORT FLAGS PSC BLOCK */
 SET @STEPTTS = GETDATE()
+CREATE TABLE #MDVISIT_OBSERVATIONS(COHORT_NAME VARCHAR(100), FEATURE_NAME VARCHAR(100), PATIENT_NUM INT);
+CREATE TABLE #ET_AL_OBSERVATIONS(COHORT_NAME VARCHAR(100), FEATURE_NAME VARCHAR(100), PATIENT_NUM INT);
+CREATE TABLE #COHORT_FLAGS_PSC (COHORT_NAME VARCHAR(100), PATIENT_NUM INT, SEX VARCHAR(10), AGE INT
+    , [Num_DX1] FLOAT, [Num_DX2] FLOAT, [MedUse1] FLOAT, [MedUse2] FLOAT, [Mammography] FLOAT, [PapTest] FLOAT, [PSATest] FLOAT, [Colonoscopy] FLOAT, [FecalOccultTest] FLOAT, [FluShot] FLOAT, [PneumococcalVaccine]
+    FLOAT, [BMI] FLOAT, [A1C] FLOAT, [MedicalExam] FLOAT, [INP1_OPT1_Visit] FLOAT, [OPT2_Visit] FLOAT, [ED_Visit] FLOAT, [MDVisit_pname2] FLOAT, [MDVisit_pname3] FLOAT,[Routine_Care_2] FLOAT
+    , [Predicted_Score] FLOAT
+    , LAST_VISIT DATE);
 
-;WITH MDVISIT_FEATURES AS (
-select Feature_name, CD.CONCEPT_CD
-FROM xref_LoyaltyCode_paths P
-  JOIN CONCEPT_DIMENSION CD
-    ON CD.CONCEPT_PATH LIKE P.ACT_PATH+'%'
-WHERE Feature_name IN ('MDVisit_pname2','MDVisit_pname3')
-) 
-SELECT DISTINCT COHORT_NAME, Feature_name, PATIENT_NUM
-INTO #MDVISIT_OBSERVATIONS
-FROM (
-SELECT COHORT_NAME, O.PATIENT_NUM, O.PROVIDER_ID, MF.FEATURE_NAME, COUNT(DISTINCT CONVERT(DATE, O.START_DATE)) N
-FROM OBSERVATION_FACT O
-  JOIN #cohort C
-    ON O.PATIENT_NUM = C.patient_num
-  JOIN MDVISIT_FEATURES MF
-    ON O.CONCEPT_CD = MF.CONCEPT_CD
-WHERE CONVERT(DATE,O.START_DATE) BETWEEN DATEADD(YY,-@lookbackYears,@indexDate) and @indexDate
-GROUP BY COHORT_NAME, O.PATIENT_NUM, O.PROVIDER_ID, MF.FEATURE_NAME
-)RAWFREQ
-WHERE (Feature_name = 'MDVisit_pname2' AND N=2) OR (Feature_name = 'MDVisit_pname3' AND N >= 3)
+if(@indexDate_override=0)
+BEGIN
 
-;WITH ET_AL_FEATURES AS (
-select distinct Feature_name, concept_cd, 1 AS THRESHOLD
-from DBO.xref_LoyaltyCode_paths L, CONCEPT_DIMENSION c
-where C.CONCEPT_PATH like L.Act_path+'%'  --jgk: must support local children
-AND code_type IN ('DX','PX','lab','SITE') /* <PE.1> IF YOUR SITE IS MANAGING ANY SITE SPECIFIC CODES FOR THE FOLLOWING DOMAINS SET THEIR CODE_TYPE = 'SITE' IN dbo.xref_LoyaltyCode_paths </PE.1> */
-and (act_path <> '**Not Found' and act_path is not null)
-AND Feature_name NOT IN ('Num_DX1','Num_DX2','MedUse1','MedUse2','MDVisit_pname2','MDVisit_pname3', 'MD Visit')
-UNION 
-select distinct 'Routine_Care_2' as Feature_name, concept_cd, 2 AS THRESHOLD--[ACT_PATH], 
-from DBO.xref_LoyaltyCode_paths L, CONCEPT_DIMENSION c
-where C.CONCEPT_PATH like L.Act_path+'%'  --jgk: must support local children
-AND code_type IN ('DX','PX','lab','SITE') /* <PE.1> IF YOUR SITE IS MANAGING ANY SITE SPECIFIC CODES FOR THE FOLLOWING DOMAINS SET THEIR CODE_TYPE = 'SITE' IN dbo.xref_LoyaltyCode_paths </PE.1> */
-and (act_path <> '**Not Found' and act_path is not null)
-AND Feature_name IN ('MedicalExam','Mammography','PSATest','Colonoscopy','FecalOccultTest','FluShot','PneumococcalVaccine','A1C','BMI')
-UNION
-SELECT Feature_name, CD.CONCEPT_CD, REPLACE(REPLACE(FEATURE_NAME,'Num_DX',''),'MedUse','') as THRESHOLD
-FROM xref_LoyaltyCode_paths P
-  JOIN CONCEPT_DIMENSION CD
-    ON CD.CONCEPT_PATH LIKE P.ACT_PATH+'%'
-WHERE Feature_name in ('Num_DX1','Num_DX2','MedUse1','MedUse2')
-)
-SELECT COHORT_NAME, F.Feature_name, C.patient_num
-INTO #ET_AL_OBSERVATIONS
-FROM OBSERVATION_FACT O
-  JOIN #cohort C
-    ON O.PATIENT_NUM = C.patient_num
-  JOIN ET_AL_FEATURES F
-    ON O.CONCEPT_CD = F.CONCEPT_CD
-WHERE CONVERT(DATE,O.START_DATE) BETWEEN DATEADD(YY,-@lookbackYears,@indexDate) and @indexDate
-GROUP BY COHORT_NAME, F.Feature_name, C.patient_num, F.THRESHOLD
-HAVING COUNT(DISTINCT CONVERT(DATE, O.START_DATE)) >= F.THRESHOLD
+  ;WITH MDVISIT_FEATURES AS (
+  select Feature_name, CD.CONCEPT_CD
+  FROM xref_LoyaltyCode_paths P
+    JOIN CONCEPT_DIMENSION CD
+      ON CD.CONCEPT_PATH LIKE P.ACT_PATH+'%'
+  WHERE Feature_name IN ('MDVisit_pname2','MDVisit_pname3')
+  ) 
+  INSERT INTO #MDVISIT_OBSERVATIONS WITH(TABLOCK)(COHORT_NAME,FEATURE_NAME,PATIENT_NUM)
+  SELECT DISTINCT COHORT_NAME, Feature_name, PATIENT_NUM
+  FROM (
+  SELECT COHORT_NAME, O.PATIENT_NUM, O.PROVIDER_ID, MF.FEATURE_NAME, COUNT(DISTINCT CONVERT(DATE, O.START_DATE)) N
+  FROM OBSERVATION_FACT O
+    JOIN #cohort C
+      ON O.PATIENT_NUM = C.patient_num
+    JOIN MDVISIT_FEATURES MF
+      ON O.CONCEPT_CD = MF.CONCEPT_CD
+  WHERE O.START_DATE BETWEEN DATEADD(YY,-@lookbackYears,@indexDate) and @indexDate
+  GROUP BY COHORT_NAME, O.PATIENT_NUM, O.PROVIDER_ID, MF.FEATURE_NAME
+  )RAWFREQ
+  WHERE (Feature_name = 'MDVisit_pname2' AND N=2) OR (Feature_name = 'MDVisit_pname3' AND N >= 3)
+  
+  ;WITH ET_AL_FEATURES AS (
+  select distinct Feature_name, concept_cd, 1 AS THRESHOLD
+  from DBO.xref_LoyaltyCode_paths L, CONCEPT_DIMENSION c
+  where C.CONCEPT_PATH like L.Act_path+'%'  --jgk: must support local children
+  AND code_type IN ('DX','PX','lab','SITE') /* <PE.1> IF YOUR SITE IS MANAGING ANY SITE SPECIFIC CODES FOR THE FOLLOWING DOMAINS SET THEIR CODE_TYPE = 'SITE' IN dbo.xref_LoyaltyCode_paths </PE.1> */
+  and (act_path <> '**Not Found' and act_path is not null)
+  AND Feature_name NOT IN ('Num_DX1','Num_DX2','MedUse1','MedUse2','MDVisit_pname2','MDVisit_pname3', 'MD Visit')
+  UNION 
+  select distinct 'Routine_Care_2' as Feature_name, concept_cd, 2 AS THRESHOLD --[ACT_PATH], 
+  from DBO.xref_LoyaltyCode_paths L, CONCEPT_DIMENSION c
+  where C.CONCEPT_PATH like L.Act_path+'%'  --jgk: must support local children
+  AND code_type IN ('DX','PX','lab','SITE') /* <PE.1> IF YOUR SITE IS MANAGING ANY SITE SPECIFIC CODES FOR THE FOLLOWING DOMAINS SET THEIR CODE_TYPE = 'SITE' IN dbo.xref_LoyaltyCode_paths </PE.1> */
+  and (act_path <> '**Not Found' and act_path is not null)
+  AND Feature_name IN ('MedicalExam','Mammography','PSATest','Colonoscopy','FecalOccultTest','FluShot','PneumococcalVaccine','A1C','BMI')
+  UNION
+  SELECT Feature_name, CD.CONCEPT_CD, REPLACE(REPLACE(FEATURE_NAME,'Num_DX',''),'MedUse','') as THRESHOLD
+  FROM xref_LoyaltyCode_paths P
+    JOIN CONCEPT_DIMENSION CD
+      ON CD.CONCEPT_PATH LIKE P.ACT_PATH+'%'
+  WHERE Feature_name in ('Num_DX1','Num_DX2','MedUse1','MedUse2')
+  )
+  INSERT INTO #ET_AL_OBSERVATIONS WITH(TABLOCK) (COHORT_NAME, FEATURE_NAME, PATIENT_NUM)
+  SELECT COHORT_NAME, F.Feature_name, C.patient_num
+  FROM OBSERVATION_FACT O
+    JOIN #cohort C
+      ON O.PATIENT_NUM = C.patient_num
+    JOIN ET_AL_FEATURES F
+      ON O.CONCEPT_CD = F.CONCEPT_CD
+  WHERE O.START_DATE BETWEEN DATEADD(YY,-@lookbackYears,@indexDate) and @indexDate
+  GROUP BY COHORT_NAME, F.Feature_name, C.patient_num, F.THRESHOLD
+  HAVING COUNT(DISTINCT CONVERT(DATE, O.START_DATE)) >= F.THRESHOLD
+  
+  ;WITH PATIENT_FEATURES AS (
+  SELECT COHORT_NAME, FEATURE_NAME, PATIENT_NUM FROM #MDVISIT_OBSERVATIONS
+  UNION ALL
+  SELECT COHORT_NAME, FEATURE_NAME, PATIENT_NUM FROM #ET_AL_OBSERVATIONS
+  UNION ALL
+  SELECT COHORT_NAME, 'INP1_OPT1_Visit' AS FEATURE_NAME, PATIENT_NUM FROM #COHORT WHERE INP1_OPT1_VISIT != 0
+  UNION ALL
+  SELECT COHORT_NAME, 'OPT2_Visit' AS FEATURE_NAME, PATIENT_NUM FROM #COHORT WHERE OPT2_Visit != 0
+  UNION ALL
+  SELECT COHORT_NAME, 'ED_Visit' AS FEATURE_NAME, PATIENT_NUM FROM #COHORT WHERE ED_Visit != 0
+  )
+  , PATIENT_PSC_COEFF AS (
+  SELECT PF.*, CF.COEFF
+  FROM PATIENT_FEATURES PF
+    JOIN xref_LoyaltyCode_PSCoeff CF
+      ON PF.Feature_name = CF.FIELD_NAME
+  )
+  INSERT INTO #COHORT_FLAGS_PSC WITH(TABLOCK) (COHORT_NAME, PATIENT_NUM, SEX, AGE, [Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], [FecalOccultTest], [FluShot], [PneumococcalVaccine]
+    , [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3],[Routine_Care_2],[Predicted_Score]
+    , LAST_VISIT)
+  SELECT cohort_name, PATIENT_NUM,
+  MAX(SEX) AS SEX,
+  MAX(AGE) AS AGE,
+  MAX([Num_DX1]) AS [Num_DX1],
+  MAX([Num_DX2]) AS [Num_DX2],
+  MAX([MedUse1]) AS [MedUse1],
+  MAX([MedUse2]) AS [MedUse2],
+  MAX([Mammography]) AS [Mammography],
+  MAX([PapTest]) AS [PapTest],
+  MAX([PSATest]) AS [PSATest],
+  MAX([Colonoscopy]) AS [Colonoscopy],
+  MAX(FecalOccultTest) AS FecalOccultTest,
+  MAX([FluShot]) AS [FluShot],
+  MAX([PneumococcalVaccine]) AS [PneumococcalVaccine],
+  MAX([BMI]) AS [BMI],
+  MAX([A1C]) AS [A1C],
+  MAX([MedicalExam]) AS [MedicalExam],
+  MAX([INP1_OPT1_Visit]) AS [INP1_OPT1_Visit],
+  MAX([OPT2_Visit]) AS [OPT2_Visit],
+  MAX([ED_Visit]) AS [ED_Visit],
+  MAX([MDVisit_pname2]) AS [MDVisit_pname2],
+  MAX([MDVisit_pname3]) AS [MDVisit_pname3],
+  MAX([Routine_Care_2]) AS [Routine_Care_2],
+  MAX([Predicted_Score]) AS [Predicted_Score],
+  MAX(LAST_VISIT) AS LAST_VISIT
+  FROM (
+  SELECT COHORT_NAME, PATIENT_NUM, NULL AS SEX, NULL AS AGE
+    , [Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], [FecalOccultTest], [FluShot], [PneumococcalVaccine]
+    , [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3],[Routine_Care_2],[Predicted_Score]
+    , NULL AS LAST_VISIT
+  FROM (
+  SELECT COHORT_NAME, 'Predicted_score' AS FEATURE_NAME, PATIENT_NUM, -0.010+SUM(COEFF) AS VAL FROM PATIENT_PSC_COEFF GROUP BY COHORT_NAME, PATIENT_NUM
+  UNION ALL
+  SELECT COHORT_NAME, FEATURE_NAME, PATIENT_NUM, IIF(COEFF<>0,1,0) AS VAL FROM PATIENT_PSC_COEFF
+  )O
+  PIVOT
+  (MAX(VAL) FOR FEATURE_NAME IN ([Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], [FecalOccultTest], [FluShot], [PneumococcalVaccine]
+  , [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3],[Routine_Care_2],[Predicted_Score]))P
+  UNION ALL 
+  /* UNION THE PIVOT RESULTS WITH THE HOLDING TABLE CONTENTS THAT HAVE THE AGE/SEX/LAST_VISIT DATA -- TAKE THE MAX OUTSIDE THIS SUBQUERY TO COMBINE THE RESULTS */
+  SELECT COHORT_NAME, PATIENT_NUM, SEX, AGE
+    , [Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], [FecalOccultTest], [FluShot], [PneumococcalVaccine]
+    , [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3],[Routine_Care_2],[Predicted_Score]
+    , LAST_VISIT
+  FROM #COHORT
+  )PSC
+  GROUP BY COHORT_NAME, PATIENT_NUM
+  
+  TRUNCATE TABLE #COHORT /* PREPARE TO REPLACE CONTENTS WITH NEW PSC CONTENTS FROM PREVIOUS STEP */
+  
+  INSERT INTO #COHORT (cohort_name, PATIENT_NUM, SEX, AGE, [Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], FecalOccultTest, [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3] , Routine_Care_2 , Predicted_Score , LAST_VISIT)
+  SELECT COHORT_NAME, PATIENT_NUM, SEX, AGE, [Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], FecalOccultTest, [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3]
+    , Routine_Care_2, Predicted_Score, LAST_VISIT
+  FROM #COHORT_FLAGS_PSC
+  
+  SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
+  RAISERROR(N'Cohort Flags - Rows: %d - Total Execution (ms): %d  - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
+END
 
-;WITH PATIENT_FEATURES AS (
-SELECT COHORT_NAME, FEATURE_NAME, PATIENT_NUM FROM #MDVISIT_OBSERVATIONS
-UNION ALL
-SELECT COHORT_NAME, FEATURE_NAME, PATIENT_NUM FROM #ET_AL_OBSERVATIONS
-UNION ALL
-SELECT COHORT_NAME, 'INP1_OPT1_Visit' AS FEATURE_NAME, PATIENT_NUM FROM #COHORT WHERE INP1_OPT1_VISIT != 0
-UNION ALL
-SELECT COHORT_NAME, 'OPT2_Visit' AS FEATURE_NAME, PATIENT_NUM FROM #COHORT WHERE OPT2_Visit != 0
-UNION ALL
-SELECT COHORT_NAME, 'ED_Visit' AS FEATURE_NAME, PATIENT_NUM FROM #COHORT WHERE ED_Visit != 0
-)
-, PATIENT_PSC_COEFF AS (
-SELECT PF.*, CF.COEFF
-FROM PATIENT_FEATURES PF
-  JOIN xref_LoyaltyCode_PSCoeff CF
-    ON PF.Feature_name = CF.FIELD_NAME
-)
-SELECT cohort_name, PATIENT_NUM,
-MAX(SEX) AS SEX,
-MAX(AGE) AS AGE,
-MAX([Num_DX1]) AS [Num_DX1],
-MAX([Num_DX2]) AS [Num_DX2],
-MAX([MedUse1]) AS [MedUse1],
-MAX([MedUse2]) AS [MedUse2],
-MAX([Mammography]) AS [Mammography],
-MAX([PapTest]) AS [PapTest],
-MAX([PSATest]) AS [PSATest],
-MAX([Colonoscopy]) AS [Colonoscopy],
-MAX(FecalOccultTest) AS FecalOccultTest,
-MAX([FluShot]) AS [FluShot],
-MAX([PneumococcalVaccine]) AS [PneumococcalVaccine],
-MAX([BMI]) AS [BMI],
-MAX([A1C]) AS [A1C],
-MAX([MedicalExam]) AS [MedicalExam],
-MAX([INP1_OPT1_Visit]) AS [INP1_OPT1_Visit],
-MAX([OPT2_Visit]) AS [OPT2_Visit],
-MAX([ED_Visit]) AS [ED_Visit],
-MAX([MDVisit_pname2]) AS [MDVisit_pname2],
-MAX([MDVisit_pname3]) AS [MDVisit_pname3],
-MAX([Routine_Care_2]) AS [Routine_Care_2],
-MAX([Predicted_Score]) AS [Predicted_Score],
-MAX(LAST_VISIT) AS LAST_VISIT
-INTO #COHORT_FLAGS_PSC
-FROM (
-SELECT COHORT_NAME, PATIENT_NUM, NULL AS SEX, NULL AS AGE
-  , [Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], [FecalOccultTest], [FluShot], [PneumococcalVaccine]
-  , [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3],[Routine_Care_2],[Predicted_Score]
-  , NULL AS LAST_VISIT
-FROM (
-SELECT COHORT_NAME, 'Predicted_score' AS FEATURE_NAME, PATIENT_NUM, -0.010+SUM(COEFF) AS VAL FROM PATIENT_PSC_COEFF GROUP BY COHORT_NAME, PATIENT_NUM
-UNION ALL
-SELECT COHORT_NAME, FEATURE_NAME, PATIENT_NUM, IIF(COEFF<>0,1,0) AS VAL FROM PATIENT_PSC_COEFF
-)O
-PIVOT
-(MAX(VAL) FOR FEATURE_NAME IN ([Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], [FecalOccultTest], [FluShot], [PneumococcalVaccine]
-, [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3],[Routine_Care_2],[Predicted_Score]))P
-UNION ALL 
-/* UNION THE PIVOT RESULTS WITH THE HOLDING TABLE CONTENTS THAT HAVE THE AGE/SEX/LAST_VISIT DATA -- TAKE THE MAX OUTSIDE THIS SUBQUERY TO COMBINE THE RESULTS */
-SELECT COHORT_NAME, PATIENT_NUM, SEX, AGE
-  , [Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], [FecalOccultTest], [FluShot], [PneumococcalVaccine]
-  , [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3],[Routine_Care_2],[Predicted_Score]
-  , LAST_VISIT
-FROM #COHORT
-)PSC
-GROUP BY COHORT_NAME, PATIENT_NUM
+if(@indexDate_OVERRIDE=1)
+BEGIN
 
-TRUNCATE TABLE #COHORT /* PREPARE TO REPLACE CONTENTS WITH NEW PSC CONTENTS FROM PREVIOUS STEP */
-
-INSERT INTO #COHORT (cohort_name, PATIENT_NUM, SEX, AGE, [Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], FecalOccultTest, [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3] , Routine_Care_2 , Predicted_Score , LAST_VISIT)
-SELECT COHORT_NAME, PATIENT_NUM, SEX, AGE, [Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], FecalOccultTest, [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3]
-  , Routine_Care_2, Predicted_Score, LAST_VISIT
-FROM #COHORT_FLAGS_PSC
-
-SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
-RAISERROR(N'Cohort Flags - Rows: %d - Total Execution (ms): %d  - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
+  ;WITH MDVISIT_FEATURES AS (
+  select Feature_name, CD.CONCEPT_CD
+  FROM xref_LoyaltyCode_paths P
+    JOIN CONCEPT_DIMENSION CD
+      ON CD.CONCEPT_PATH LIKE P.ACT_PATH+'%'
+  WHERE Feature_name IN ('MDVisit_pname2','MDVisit_pname3')
+  ) 
+  INSERT INTO #MDVISIT_OBSERVATIONS WITH(TABLOCK)(COHORT_NAME,FEATURE_NAME,PATIENT_NUM)
+  SELECT DISTINCT COHORT_NAME, Feature_name, PATIENT_NUM
+  FROM (
+  SELECT COHORT_NAME, O.PATIENT_NUM, O.PROVIDER_ID, MF.FEATURE_NAME, COUNT(DISTINCT CONVERT(DATE, O.START_DATE)) N
+  FROM OBSERVATION_FACT O
+    JOIN #cohort C
+      ON O.PATIENT_NUM = C.patient_num
+    JOIN MDVISIT_FEATURES MF
+      ON O.CONCEPT_CD = MF.CONCEPT_CD
+  WHERE O.START_DATE BETWEEN DATEADD(YY,-@lookbackYears,C.INDEX_DATE) and C.INDEX_DATE
+  GROUP BY COHORT_NAME, O.PATIENT_NUM, O.PROVIDER_ID, MF.FEATURE_NAME
+  )RAWFREQ
+  WHERE (Feature_name = 'MDVisit_pname2' AND N=2) OR (Feature_name = 'MDVisit_pname3' AND N >= 3)
+  
+  ;WITH ET_AL_FEATURES AS (
+  select distinct Feature_name, concept_cd, 1 AS THRESHOLD
+  from DBO.xref_LoyaltyCode_paths L, CONCEPT_DIMENSION c
+  where C.CONCEPT_PATH like L.Act_path+'%'  --jgk: must support local children
+  AND code_type IN ('DX','PX','lab','SITE') /* <PE.1> IF YOUR SITE IS MANAGING ANY SITE SPECIFIC CODES FOR THE FOLLOWING DOMAINS SET THEIR CODE_TYPE = 'SITE' IN dbo.xref_LoyaltyCode_paths </PE.1> */
+  and (act_path <> '**Not Found' and act_path is not null)
+  AND Feature_name NOT IN ('Num_DX1','Num_DX2','MedUse1','MedUse2','MDVisit_pname2','MDVisit_pname3', 'MD Visit')
+  UNION 
+  select distinct 'Routine_Care_2' as Feature_name, concept_cd, 2 AS THRESHOLD--[ACT_PATH], 
+  from DBO.xref_LoyaltyCode_paths L, CONCEPT_DIMENSION c
+  where C.CONCEPT_PATH like L.Act_path+'%'  --jgk: must support local children
+  AND code_type IN ('DX','PX','lab','SITE') /* <PE.1> IF YOUR SITE IS MANAGING ANY SITE SPECIFIC CODES FOR THE FOLLOWING DOMAINS SET THEIR CODE_TYPE = 'SITE' IN dbo.xref_LoyaltyCode_paths </PE.1> */
+  and (act_path <> '**Not Found' and act_path is not null)
+  AND Feature_name IN ('MedicalExam','Mammography','PSATest','Colonoscopy','FecalOccultTest','FluShot','PneumococcalVaccine','A1C','BMI')
+  UNION
+  SELECT Feature_name, CD.CONCEPT_CD, REPLACE(REPLACE(FEATURE_NAME,'Num_DX',''),'MedUse','') as THRESHOLD
+  FROM xref_LoyaltyCode_paths P
+    JOIN CONCEPT_DIMENSION CD
+      ON CD.CONCEPT_PATH LIKE P.ACT_PATH+'%'
+  WHERE Feature_name in ('Num_DX1','Num_DX2','MedUse1','MedUse2')
+  )
+  INSERT INTO #ET_AL_OBSERVATIONS WITH(TABLOCK) (COHORT_NAME, FEATURE_NAME, PATIENT_NUM)
+  SELECT COHORT_NAME, F.Feature_name, C.patient_num
+  FROM OBSERVATION_FACT O
+    JOIN #cohort C
+      ON O.PATIENT_NUM = C.patient_num
+    JOIN ET_AL_FEATURES F
+      ON O.CONCEPT_CD = F.CONCEPT_CD
+  WHERE O.START_DATE BETWEEN DATEADD(YY,-@lookbackYears,C.INDEX_DATE) and C.INDEX_DATE
+  GROUP BY COHORT_NAME, F.Feature_name, C.patient_num, F.THRESHOLD
+  HAVING COUNT(DISTINCT CONVERT(DATE, O.START_DATE)) >= F.THRESHOLD
+  
+  ;WITH PATIENT_FEATURES AS (
+  SELECT COHORT_NAME, FEATURE_NAME, PATIENT_NUM FROM #MDVISIT_OBSERVATIONS
+  UNION ALL
+  SELECT COHORT_NAME, FEATURE_NAME, PATIENT_NUM FROM #ET_AL_OBSERVATIONS
+  UNION ALL
+  SELECT COHORT_NAME, 'INP1_OPT1_Visit' AS FEATURE_NAME, PATIENT_NUM FROM #COHORT WHERE INP1_OPT1_VISIT != 0
+  UNION ALL
+  SELECT COHORT_NAME, 'OPT2_Visit' AS FEATURE_NAME, PATIENT_NUM FROM #COHORT WHERE OPT2_Visit != 0
+  UNION ALL
+  SELECT COHORT_NAME, 'ED_Visit' AS FEATURE_NAME, PATIENT_NUM FROM #COHORT WHERE ED_Visit != 0
+  )
+  , PATIENT_PSC_COEFF AS (
+  SELECT PF.*, CF.COEFF
+  FROM PATIENT_FEATURES PF
+    JOIN xref_LoyaltyCode_PSCoeff CF
+      ON PF.Feature_name = CF.FIELD_NAME
+  )
+  INSERT INTO #COHORT_FLAGS_PSC WITH(TABLOCK) (COHORT_NAME, PATIENT_NUM, SEX, AGE, [Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], [FecalOccultTest], [FluShot], [PneumococcalVaccine]
+    , [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3],[Routine_Care_2],[Predicted_Score]
+    , LAST_VISIT)
+  SELECT cohort_name, PATIENT_NUM,
+  MAX(SEX) AS SEX,
+  MAX(AGE) AS AGE,
+  MAX([Num_DX1]) AS [Num_DX1],
+  MAX([Num_DX2]) AS [Num_DX2],
+  MAX([MedUse1]) AS [MedUse1],
+  MAX([MedUse2]) AS [MedUse2],
+  MAX([Mammography]) AS [Mammography],
+  MAX([PapTest]) AS [PapTest],
+  MAX([PSATest]) AS [PSATest],
+  MAX([Colonoscopy]) AS [Colonoscopy],
+  MAX(FecalOccultTest) AS FecalOccultTest,
+  MAX([FluShot]) AS [FluShot],
+  MAX([PneumococcalVaccine]) AS [PneumococcalVaccine],
+  MAX([BMI]) AS [BMI],
+  MAX([A1C]) AS [A1C],
+  MAX([MedicalExam]) AS [MedicalExam],
+  MAX([INP1_OPT1_Visit]) AS [INP1_OPT1_Visit],
+  MAX([OPT2_Visit]) AS [OPT2_Visit],
+  MAX([ED_Visit]) AS [ED_Visit],
+  MAX([MDVisit_pname2]) AS [MDVisit_pname2],
+  MAX([MDVisit_pname3]) AS [MDVisit_pname3],
+  MAX([Routine_Care_2]) AS [Routine_Care_2],
+  MAX([Predicted_Score]) AS [Predicted_Score],
+  MAX(LAST_VISIT) AS LAST_VISIT
+  FROM (
+  SELECT COHORT_NAME, PATIENT_NUM, NULL AS SEX, NULL AS AGE
+    , [Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], [FecalOccultTest], [FluShot], [PneumococcalVaccine]
+    , [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3],[Routine_Care_2],[Predicted_Score]
+    , NULL AS LAST_VISIT
+  FROM (
+  SELECT COHORT_NAME, 'Predicted_score' AS FEATURE_NAME, PATIENT_NUM, -0.010+SUM(COEFF) AS VAL FROM PATIENT_PSC_COEFF GROUP BY COHORT_NAME, PATIENT_NUM
+  UNION ALL
+  SELECT COHORT_NAME, FEATURE_NAME, PATIENT_NUM, IIF(COEFF<>0,1,0) AS VAL FROM PATIENT_PSC_COEFF
+  )O
+  PIVOT
+  (MAX(VAL) FOR FEATURE_NAME IN ([Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], [FecalOccultTest], [FluShot], [PneumococcalVaccine]
+  , [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3],[Routine_Care_2],[Predicted_Score]))P
+  UNION ALL 
+  /* UNION THE PIVOT RESULTS WITH THE HOLDING TABLE CONTENTS THAT HAVE THE AGE/SEX/LAST_VISIT DATA -- TAKE THE MAX OUTSIDE THIS SUBQUERY TO COMBINE THE RESULTS */
+  SELECT COHORT_NAME, PATIENT_NUM, SEX, AGE
+    , [Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], [FecalOccultTest], [FluShot], [PneumococcalVaccine]
+    , [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3],[Routine_Care_2],[Predicted_Score]
+    , LAST_VISIT
+  FROM #COHORT
+  )PSC
+  GROUP BY COHORT_NAME, PATIENT_NUM
+  
+  TRUNCATE TABLE #COHORT /* PREPARE TO REPLACE CONTENTS WITH NEW PSC CONTENTS FROM PREVIOUS STEP */
+  
+  INSERT INTO #COHORT (cohort_name, PATIENT_NUM, SEX, AGE, [Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], FecalOccultTest, [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3] , Routine_Care_2 , Predicted_Score , LAST_VISIT)
+  SELECT COHORT_NAME, PATIENT_NUM, SEX, AGE, [Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], FecalOccultTest, [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3]
+    , Routine_Care_2, Predicted_Score, LAST_VISIT
+  FROM #COHORT_FLAGS_PSC
+  
+  SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
+  RAISERROR(N'Cohort Flags - Rows: %d - Total Execution (ms): %d  - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
+END
 
 /* Cohort Agegrp - Makes Predictive Score filtering easier in final step if pre-calculated */
 SET @STEPTTS = GETDATE()
@@ -489,7 +762,7 @@ SELECT *
 INTO #cohort_agegrp
 FROM (
 select cohort_name
-, patient_num
+,patient_num
 ,sex
 ,CAST(case when ISNULL(AGE,0)< 65 then 'Under 65' 
      when AGE>=65 then 'Over 65' else null end AS VARCHAR(20)) as AGEGRP
@@ -677,7 +950,7 @@ FROM (
         FROM OBSERVATION_FACT F 
           JOIN #CHARLSON_VISIT_BASE V 
             ON F.PATIENT_NUM = V.PATIENT_NUM
-            AND F.START_DATE BETWEEN DATEADD(YY,-1,V.LAST_VISIT) AND V.LAST_VISIT
+            AND F.START_DATE BETWEEN DATEADD(YY,-1,V.LAST_VISIT) AND V.LAST_VISIT /* CALCULATE CHARLSON OVER THE LAST YEAR BEFORE THE LAST VISIT IN THE MEASURE PERIOD FOR EACH PATIENT */
        )O
     JOIN #CHARLSON_DX C
       ON O.CONCEPT_CD = C.CONCEPT_CD

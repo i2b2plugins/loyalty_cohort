@@ -1,0 +1,152 @@
+
+/* This script computes the loyalty score on all patients older than 18 with a visit in 2021, with a 2-year lookback and the index date set to each patient's last visit. It creates the following summary tables:
+    * loyalty_at_last_visit: The per-patient loyalty score and flags that caused this loyalty score.
+    * loyalty_cohort_filter: The patient_nums and the index dates.
+    * loyalty_raw_vw and loyalty_pcs_dist: Summary tables of loyalty score by a) patient and b) loyalty score. */
+/* CALCULATE LOYALTY PREDICTIVE SCORE */
+
+IF OBJECT_ID(N'tempdb..#LOYALTY_SCORE') IS NOT NULL DROP TABLE #LOYALTY_SCORE
+
+CREATE TABLE #LOYALTY_SCORE (
+cohort_name VARCHAR(100) NOT NULL,
+patient_num INT NOT NULL,
+sex varchar(50) null,
+age int null,
+Num_Dx1 bit not null DEFAULT 0,
+Num_Dx2 bit not null DEFAULT 0,
+MedUse1 bit not null DEFAULT 0,
+MedUse2 bit not null DEFAULT 0,
+Mammography bit not null DEFAULT 0,
+PapTest bit not null DEFAULT 0,
+PSATest bit not null DEFAULT 0,
+Colonoscopy bit not null DEFAULT 0,
+FecalOccultTest bit not null DEFAULT 0,
+FluShot bit not null DEFAULT 0,
+PneumococcalVaccine bit not null DEFAULT 0,
+BMI bit not null DEFAULT 0,
+A1C bit not null DEFAULT 0,
+MedicalExam bit not null DEFAULT 0,
+INP1_OPT1_Visit bit not null DEFAULT 0,
+OPT2_Visit bit not null DEFAULT 0,
+ED_Visit bit not null DEFAULT 0,
+MDVisit_pname2 bit not null DEFAULT 0,
+MDVisit_pname3 bit not null DEFAULT 0,
+Routine_Care_2 bit not null DEFAULT 0,
+Predicted_score FLOAT not null DEFAULT -0.010, /* default is intercept */
+LAST_VISIT DATE NULL,
+CONSTRAINT PKCOHORT_TT PRIMARY KEY (cohort_name, patient_num)
+)
+
+DECLARE @cfilter udt_CohortFilter_vIDt
+
+/* PASS LAST FACT DATE FOR ALL PATIENTS AS A TEST */
+INSERT INTO @cfilter (PATIENT_NUM, COHORT_NAME, INDEX_DT)
+SELECT V.PATIENT_NUM, 'ALL_LASTVS' AS COHORT_NAME, MAX(CONVERT(DATE,START_DATE))
+FROM DBO.VISIT_DIMENSION V
+  JOIN DBO.PATIENT_DIMENSION P
+    ON V.PATIENT_NUM = P.PATIENT_NUM
+    AND FLOOR(DATEDIFF(DD,P.BIRTH_DATE,V.START_DATE)/365.25) > 18
+WHERE CONVERT(DATE,START_DATE) >= '20210101' AND CONVERT(DATE,START_DATE) <= '20211231'
+GROUP BY V.PATIENT_NUM
+
+/* BASE LOYALTY OFF SAME RUNOUT WINDOW AS COVID TEST WINDOWS ABOVE */
+
+INSERT INTO #LOYALTY_SCORE(cohort_name, PATIENT_NUM, SEX, AGE, [Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], FecalOccultTest, [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3] , Routine_Care_2 , Predicted_Score , LAST_VISIT)
+EXEC [dbo].[usp_LoyaltyCohort_PCSONLY] 
+  @indexDate = '20220201'
+  , @site='UKY'
+  , @lookbackYears=2
+  , @gendered=1
+  , @filter_by_existing_cohort=1
+  , @cohort_filter=@cfilter
+  , @output=1
+  , @indexDate_OVERRIDE=1;
+
+--/* STORE PERMANENTLY IF YOU WANT 
+
+IF OBJECT_ID(N'LOYALTY_AT_LAST_VISIT') IS NOT NULL DROP TABLE LOYALTY_AT_LAST_VISIT;
+
+SELECT *
+INTO LOYALTY_AT_LAST_VISIT
+FROM #LOYALTY_SCORE;
+
+-- 
+
+IF OBJECT_ID(N'LOYALTY_PCS_DIST') IS NOT NULL DROP TABLE LOYALTY_PCS_DIST;
+
+;WITH CTE_WIDE AS (
+SELECT Q.DECILE, Q.FLOOR_DECILE, Q.CEILING_DECILE, C.*
+FROM (
+SELECT DECILE, MIN(PREDICTED_SCORE)+(CASE WHEN DECILE != 10 THEN .001 ELSE .000 END) FLOOR_DECILE /* ADJUST TO NON-INCLUSIVE QUINTILE (NTILE DEFAULT BEHAVIOR IN MSSQL WOULD CAUSE OVERLAP HERE) */
+  , MAX(PREDICTED_SCORE) CEILING_DECILE
+FROM (
+SELECT PREDICTED_SCORE, NTILE(10) OVER (ORDER BY PREDICTED_SCORE DESC) DECILE 
+FROM LOYALTY_AT_LAST_VISIT)P
+GROUP BY DECILE
+)Q JOIN LOYALTY_AT_LAST_VISIT C
+  ON C.PREDICTED_SCORE BETWEEN Q.FLOOR_DECILE AND Q.CEILING_DECILE
+)
+, CTE_UNPIVOT AS (
+SELECT * 
+FROM (
+SELECT DECILE, FLOOR_DECILE, CEILING_DECILE, PATIENT_NUM, AGE, [Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], FecalOccultTest, [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3] , Routine_Care_2
+FROM CTE_WIDE
+)O
+UNPIVOT
+([VALUE] FOR [PSVAR] IN ([Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], FecalOccultTest, [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3] , Routine_Care_2))U
+)
+SELECT DECILE, FLOOR_DECILE, CEILING_DECILE
+  , PSVAR, [VALUE], AVG(AGE) MEAN_AGE
+  , MIN(AGE) AS AGE_FLOOR
+  , MAX(AGE) AS AGE_CEILING
+  , CONCAT(TRY_CAST(MIN(AGE) AS VARCHAR(3)),' - ',TRY_CAST(MAX(AGE) AS VARCHAR(3))) AS AGE_RANGE_LABEL
+  , COUNT(DISTINCT PATIENT_NUM) N
+  , CONCAT('DECILE: ',TRY_CAST(DECILE AS VARCHAR(3)),' (',TRY_CAST(FLOOR_DECILE AS VARCHAR(5)),'-',TRY_CAST(CEILING_DECILE AS VARCHAR(5)),') - PCS Variable(s):',IIF([VALUE]=1,'True','False')) AS DECILE_LABEL
+  , CONCAT('N=',TRY_CAST(COUNT(DISTINCT PATIENT_NUM) AS VARCHAR(10)),' ~ Mean Age: ',TRY_CAST(AVG(AGE) AS VARCHAR(5))) AS DTL_LABEL
+INTO LOYALTY_PCS_DIST
+FROM CTE_UNPIVOT
+GROUP BY DECILE, FLOOR_DECILE, CEILING_DECILE, PSVAR, [VALUE]
+ORDER BY 1 ASC, 2
+GO
+
+
+IF OBJECT_ID(N'LOYALTY_COHORT_FILTER') IS NOT NULL DROP TABLE LOYALTY_COHORT_FILTER;
+
+/* PASS LAST FACT DATE FOR ALL PATIENTS AS A TEST */
+SELECT V.PATIENT_NUM, 'ALL_LASTVS' AS COHORT_NAME, MAX(CONVERT(DATE,START_DATE)) INDEX_DT
+INTO LOYALTY_COHORT_FILTER
+FROM DBO.VISIT_DIMENSION V
+  JOIN DBO.PATIENT_DIMENSION P
+    ON V.PATIENT_NUM = P.PATIENT_NUM
+    AND FLOOR(DATEDIFF(DD,P.BIRTH_DATE,V.START_DATE)/365.25) > 18
+WHERE CONVERT(DATE,START_DATE) >= '20210101' AND CONVERT(DATE,START_DATE) <= '20211231'
+GROUP BY V.PATIENT_NUM;
+GO
+
+/* MAKE SURE THIS RUNS AS ONLY UNIT IN TRANSACTION (GO ABOVE AND BELOW IN SSMS) OR GET ERROR -- CAN SELECT THIS BLOCK AND RUN BY ITSELF IF ISSUES */
+CREATE OR ALTER VIEW LOYALTY_RAW_VW AS
+WITH CTE_WIDE AS (
+SELECT Q.DECILE, Q.FLOOR_DECILE, Q.CEILING_DECILE, C.*
+FROM (
+SELECT DECILE, MIN(PREDICTED_SCORE)+(CASE WHEN DECILE != 10 THEN .001 ELSE .000 END) FLOOR_DECILE /* ADJUST TO NON-INCLUSIVE QUINTILE (NTILE DEFAULT BEHAVIOR IN MSSQL WOULD CAUSE OVERLAP HERE) */
+  , MAX(PREDICTED_SCORE) CEILING_DECILE
+FROM (
+SELECT PREDICTED_SCORE, NTILE(10) OVER (ORDER BY PREDICTED_SCORE DESC) DECILE 
+FROM I2B2ACT.DBO.LOYALTY_AT_LAST_VISIT)P
+GROUP BY DECILE
+)Q JOIN LOYALTY_AT_LAST_VISIT C
+  ON C.PREDICTED_SCORE BETWEEN Q.FLOOR_DECILE AND Q.CEILING_DECILE
+)
+, CTE_UNPIVOT AS (
+SELECT * 
+FROM (
+SELECT DECILE, FLOOR_DECILE, CEILING_DECILE, PATIENT_NUM, AGE, [Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], FecalOccultTest, [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3] , Routine_Care_2
+FROM CTE_WIDE
+)O
+UNPIVOT
+([VALUE] FOR [PSVAR] IN ([Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], FecalOccultTest, [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3] , Routine_Care_2))U
+)
+SELECT CF.PATIENT_NUM, CU.AGE, CU.DECILE, CU.FLOOR_DECILE, CU.CEILING_DECILE, CU.PSVAR, CU.VALUE
+FROM LOYALTY_COHORT_FILTER CF LEFT JOIN CTE_UNPIVOT CU
+  ON CF.PATIENT_NUM = CU.PATIENT_NUM;
+GO

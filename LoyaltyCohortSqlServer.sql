@@ -928,11 +928,11 @@ SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE())
 RAISERROR(N'Final Summary Table - Rows: %d - Total Execution (ms): %d - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
 
 -- Add obfuscated patient counts to the percent 11/10/21
-update s set TotalSubjects=s2.TotalSubjects + FLOOR(ABS(BINARY_CHECKSUM(NEWID())/2147483648.0)*(10*2+1)) - 10,
-  TotalSubjectsMale=s2.TotalSubjectsMale + FLOOR(ABS(BINARY_CHECKSUM(NEWID())/2147483648.0)*(10*2+1)) - 10,
-  TotalSubjectsFemale=s2.TotalSubjectsFemale + FLOOR(ABS(BINARY_CHECKSUM(NEWID())/2147483648.0)*(10*2+1)) - 10
-  from dbo.loyalty_dev_summary as s inner join dbo.loyalty_dev_summary as s2 on s.tablename=s2.tablename
-  where s.Summary_Description='PercentOfSubjects' and s2.Summary_Description='Patient Counts'
+--update s set TotalSubjects=s2.TotalSubjects + FLOOR(ABS(BINARY_CHECKSUM(NEWID())/2147483648.0)*(10*2+1)) - 10,
+--  TotalSubjectsMale=s2.TotalSubjectsMale + FLOOR(ABS(BINARY_CHECKSUM(NEWID())/2147483648.0)*(10*2+1)) - 10,
+--  TotalSubjectsFemale=s2.TotalSubjectsFemale + FLOOR(ABS(BINARY_CHECKSUM(NEWID())/2147483648.0)*(10*2+1)) - 10
+--  from dbo.loyalty_dev_summary as s inner join dbo.loyalty_dev_summary as s2 on s.tablename=s2.tablename
+--  where s.Summary_Description='PercentOfSubjects' and s2.Summary_Description='Patient Counts'
 
 UPDATE [dbo].[loyalty_dev_summary]
 SET RUNTIMEms = @ENDRUNTIMEms
@@ -966,8 +966,8 @@ if(@output=1) /* Only if Output parameter was passed */
        WHEN tablename = 'Under 65'
         THEN 1.0*TotalSubjects/LAG(TotalSubjects,2,NULL) OVER (ORDER BY LDS.FILTER_BY_COHORT_YN, LDS.COHORT_NAME, LDS.CUTOFF_FILTER_YN, LDS.TABLENAME)
        END) as PercPopulation
-  , LDS.TotalSubjectsFemale
-  , LDS.TotalSubjectsMale
+  , LDS.TotalSubjectsFemale AS PercentFemale
+  , LDS.TotalSubjectsMale   AS PercentMale
   , LDS.AverageFactCount
   , LDS.[RUNTIMEms]
 FROM [dbo].[loyalty_dev_summary] lds

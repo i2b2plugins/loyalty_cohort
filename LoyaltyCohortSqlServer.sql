@@ -100,11 +100,83 @@ IF OBJECT_ID(N'dbo.loyalty_dev_summary', N'U') IS NULL
     [TotalSubjects] int NULL,
     [TotalSubjectsFemale] int NULL,
     [TotalSubjectsMale] int NULL,
+    [PercentPopulation] float NULL,
+    [PercentSubjectsFemale] float NULL,
+    [PercentSubjectsMale] float NULL,
     [AverageFactCount] float NULL,
     [EXTRACT_DTTM] DATETIME NOT NULL DEFAULT GETDATE(),
     [LOOKBACK_YR] INT NOT NULL,
     [RUNTIMEms] int NULL
   )
+
+/* STORE LOYALTY SCORE FOR LATER ANALYSIS */
+IF OBJECT_ID(N'dbo.loyalty_dev', N'U') IS NULL
+  CREATE TABLE [dbo].[loyalty_dev](
+	  [lookbackYears] [int] NULL,
+	  [GENDER_DENOMINATORS_YN] [char](1) NULL,
+	  [SITE] [varchar](100) NULL,
+	  [cohort_name] [varchar](100) NOT NULL,
+	  [patient_num] [int] NOT NULL,
+	  [index_dt] [date] NULL,
+	  [sex] [varchar](50) NULL,
+	  [age] [int] NULL,
+	  [AGEGRP] [varchar](20) NULL,
+	  [Num_Dx1] [bit] NOT NULL,
+	  [Num_Dx2] [bit] NOT NULL,
+	  [MedUse1] [bit] NOT NULL,
+	  [MedUse2] [bit] NOT NULL,
+	  [Mammography] [bit] NOT NULL,
+	  [PapTest] [bit] NOT NULL,
+	  [PSATest] [bit] NOT NULL,
+	  [Colonoscopy] [bit] NOT NULL,
+	  [FecalOccultTest] [bit] NOT NULL,
+	  [FluShot] [bit] NOT NULL,
+	  [PneumococcalVaccine] [bit] NOT NULL,
+	  [BMI] [bit] NOT NULL,
+	  [A1C] [bit] NOT NULL,
+	  [MedicalExam] [bit] NOT NULL,
+	  [INP1_OPT1_Visit] [bit] NOT NULL,
+	  [OPT2_Visit] [bit] NOT NULL,
+	  [ED_Visit] [bit] NOT NULL,
+	  [MDVisit_pname2] [bit] NOT NULL,
+	  [MDVisit_pname3] [bit] NOT NULL,
+	  [Routine_Care_2] [bit] NOT NULL,
+	  [Predicted_score] [float] NOT NULL
+  )
+
+/* STORE THE CHARLSON VARIABLES FOR LATER ANALYSIS */
+IF OBJECT_ID(N'dbo.loyalty_charlson_dev', N'U') IS NULL
+  CREATE TABLE [dbo].[loyalty_charlson_dev](
+	  [lookbackYears] [int] NULL,
+	  [GENDER_DENOMINATORS_YN] [char](1) NULL,
+	  [SITE] [varchar](100) NULL,
+	  [cohort_name] [varchar](100) NOT NULL,
+	  [PATIENT_NUM] [int] NOT NULL,
+	  [LAST_VISIT] [date] NULL,
+    [sex] [varchar](50) NULL,
+	  [age] [int] NULL,
+	  [AGEGRP] [varchar](20) NULL,
+	  [CHARLSON_INDEX] [int] NULL,
+	  [CHARLSON_10YR_SURVIVAL_PROB] [numeric](38, 4) NULL,
+	  [MI] [int] NULL,
+	  [CHF] [int] NULL,
+	  [CVD] [int] NULL,
+	  [PVD] [int] NULL,
+	  [DEMENTIA] [int] NULL,
+	  [COPD] [int] NULL,
+	  [RHEUMDIS] [int] NULL,
+	  [PEPULCER] [int] NULL,
+	  [MILDLIVDIS] [int] NULL,
+	  [DIABETES_NOCC] [int] NULL,
+	  [DIABETES_WTCC] [int] NULL,
+	  [HEMIPARAPLEG] [int] NULL,
+	  [RENALDIS] [int] NULL,
+	  [CANCER] [int] NULL,
+	  [MSVLIVDIS] [int] NULL,
+	  [METASTATIC] [int] NULL,
+	  [AIDSHIV] [int] NULL
+  )
+ 
 
 /* ENSURE TEMP IS CLEAR FROM PREVIOUS RUNS */
 IF OBJECT_ID(N'tempdb..#COHORT_FILTER', N'U') IS NOT NULL DROP TABLE #COHORT_FILTER;
@@ -124,14 +196,21 @@ IF OBJECT_ID(N'tempdb..#CHARLSON_DX', N'U') IS NOT NULL DROP TABLE #CHARLSON_DX;
 IF OBJECT_ID(N'tempdb..#COHORT_CHARLSON', N'U') IS NOT NULL DROP TABLE #COHORT_CHARLSON;
 IF OBJECT_ID(N'tempdb..#CHARLSON_STATS', N'U') IS NOT NULL DROP TABLE #CHARLSON_STATS;
 
-
 /* CONVERT UDT TABLE VARIABLE PARAMETER TO TEMP TABLE AND CREATE INDEXES */
 
 SELECT * INTO #COHORT_FILTER FROM @cohort_filter
 
 CREATE CLUSTERED INDEX CI_COHORT_FILTER ON #COHORT_FILTER (PATIENT_NUM, INDEX_DT, COHORT_NAME)
 
+DECLARE @COHORT_N INT = (SELECT COUNT(*) FROM #COHORT_FILTER)
+
 /* START PROCESSING */
+DECLARE @GENDER_YN CHAR(1) = IIF(@gendered=0,'N','Y')
+DECLARE @OUTPUT_YN CHAR(1) = IIF(@output=0,'N','Y')
+
+RAISERROR(N'Thank you for your participation. Please contact darren.henderson@uky.edu with any questions.', 1, 1) with nowait;
+RAISERROR(N'Please be prepared to share these debug messages if your site runs into any issues.', 1, 1) with nowait;
+RAISERROR(N'STARTING ANALYIS (COHORT_FILTER RECORDS=%d) -- SITE=%s, LOOKBACK_YR=%d, GENDER_DENOMINATORS=%s, OUTPUT=%s', 1, 1,@COHORT_N,@site,@lookbackYears,@gender_yn,@output_yn) with nowait;
 
 DECLARE @STARTTS DATETIME = GETDATE()
 DECLARE @STEPTTS DATETIME 
@@ -139,6 +218,10 @@ DECLARE @ENDRUNTIMEms INT, @STEPRUNTIMEms INT
 DECLARE @ROWS INT
 
 /* NEW MULTI-VISIT FILTER - 20220228 DWH */
+
+RAISERROR(N'Starting ephemeral patient filter - Patients must have more than one visit to be considered "loyal"', 1, 1) with nowait;
+SET @STEPTTS = GETDATE()
+
 ;WITH CTE_MULTVISIT AS (
 SELECT PATIENT_NUM, ENCOUNTER_NUM, CONVERT(DATE,START_DATE) START_DATE, CONVERT(DATE,END_DATE) END_DATE 
 /* CONVERTING TO DATE TO AGGRESSIVELY DROP OUT ADMIN-LIKE ENCOUNTERS ON SAME DAY AND TREAT THEM AS OVERLAPPING */ 
@@ -161,6 +244,8 @@ WHERE B.ENCOUNTER_NUM IS NULL /* NO OVERLAPS - GOAL HERE IS TO ONLY INCLUDE PATI
     TO THOSE OVERLAPPED ENCOUNTERS - THUS AT MINIMUM >=3 ENCOUNTERS IN THE EHR. 
 */
 
+SELECT @ROWS=@@ROWCOUNT, @ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
+RAISERROR(N'Finish ephemeral patient filter - Rows: %d - Total Execution (ms): %d - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
 
 /* PRE-BUILD AN PATIENT INCLUSION TABLE FOR `HAVING A NON-DEMOGRAPHIC FACT AFTER 20120101` */
 /* include only patients with non-demographic concepts after 20120101 
@@ -204,6 +289,9 @@ BEGIN
   )OFMINUSDEM
   INTERSECT
   SELECT PATIENT_NUM FROM #INLCPAT_MULTIVISIT /* FILTER BY THE NON-EPHEMERAL PATIENT LIST */
+
+  SET @ROWS = @@ROWCOUNT
+
 END
 
 IF(@demographic_facts=0) /* THE SITE DOES NOT STORE DEMOGRAPHIC FACTS OF ANY KIND IN OBSERVATION_FACT -- JUST NEED TO CONFIRM A FACT EXISTS BETWEEN 20120101 AND INDEX_DT */
@@ -220,9 +308,11 @@ BEGIN
   WHERE CONVERT(DATE,F.START_DATE) BETWEEN '20120101' AND CF.INDEX_DT
   INTERSECT
   SELECT PATIENT_NUM FROM #INLCPAT_MULTIVISIT /* FILTER BY THE NON-EPHEMERAL PATIENT LIST */
+
+  SET @ROWS = @@ROWCOUNT
 END
 
-SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
+SELECT @ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
 RAISERROR(N'Finish #INCLPAT - Rows: %d - Total Execution (ms): %d - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
 
 /* FINISH PRE-BUILD ACT MODEL */
@@ -293,6 +383,15 @@ SELECT @ROWS=@@ROWCOUNT
 
 IF @ROWS > 0
   RAISERROR(N'Dropping patients with null birth_date - Rows: %d', 1, 1, @ROWS) with nowait;
+
+/* DROP PEDIATRIC CASES - THE LOYALTY COHORT IS BASED OFF WORK BASED ON A MEDICARE POPULATION AND WE CURRENTLY LACK GOOD PROXIES FOR PEDIATRIC CASES FOR SOME OF THE VARIABLES/COEFFICIENTS */
+DELETE FROM #COHORT WHERE AGE <= 18
+
+SELECT @ROWS=@@ROWCOUNT
+
+IF @ROWS > 0
+  RAISERROR(N'Dropping pediatric cases - The script is not currently designed for Age<=18 - Rows: %d', 1, 1, @ROWS) with nowait;
+
 
 /* COHORT FLAGS PSC BLOCK */
 SET @STEPTTS = GETDATE()
@@ -426,6 +525,7 @@ select cohort_name
 ,patient_num
 ,index_dt
 ,sex
+,age
 ,CAST(case when ISNULL(AGE,0)< 65 then 'Under 65' 
      when AGE>=65 then 'Over 65' else null end AS VARCHAR(20)) as AGEGRP
 ,Num_Dx1              AS Num_Dx1            
@@ -455,6 +555,7 @@ select cohort_name
 ,patient_num
 ,index_dt
 ,sex
+,age
 ,'All Patients' AS AGEGRP
 ,Num_Dx1              AS Num_Dx1            
 ,Num_Dx2              AS Num_Dx2            
@@ -552,24 +653,26 @@ FROM LU_CHARLSON C
 )C
 
 ;WITH CTE_VISIT_BASE AS (
-SELECT cohort_name, PATIENT_NUM, AGE, LAST_VISIT
+SELECT cohort_name, PATIENT_NUM, SEX, AGE, LAST_VISIT
   , CASE  WHEN AGE < 50 THEN 0
           WHEN AGE BETWEEN 50 AND 59 THEN 1
           WHEN AGE BETWEEN 60 AND 69 THEN 2
           WHEN AGE >= 70 THEN 3 END AS CHARLSON_AGE_BASE
 FROM (
 SELECT cohort_name, V.PATIENT_NUM
+  , SEX
   , V.AGE
   , LAST_VISIT
 FROM #COHORT V 
 ) VISITS
 )
-SELECT cohort_name, PATIENT_NUM, AGE, LAST_VISIT, CHARLSON_AGE_BASE
+SELECT cohort_name, PATIENT_NUM, SEX, AGE, LAST_VISIT, CHARLSON_AGE_BASE
 INTO #CHARLSON_VISIT_BASE
 FROM CTE_VISIT_BASE
 
 SELECT cohort_name, PATIENT_NUM
   , LAST_VISIT
+  , SEX
   , AGE
   , CAST(case when AGE < 65 then 'Under 65' 
      when age>=65           then 'Over 65' else '-' end AS VARCHAR(20)) AS AGEGRP
@@ -580,7 +683,7 @@ SELECT cohort_name, PATIENT_NUM
   , MI, CHF, CVD, PVD, DEMENTIA, COPD, RHEUMDIS, PEPULCER, MILDLIVDIS, DIABETES_NOCC, DIABETES_WTCC, HEMIPARAPLEG, RENALDIS, CANCER, MSVLIVDIS, METASTATIC, AIDSHIV
 INTO #COHORT_CHARLSON
 FROM (
-SELECT cohort_name, PATIENT_NUM, LAST_VISIT, AGE
+SELECT cohort_name, PATIENT_NUM, LAST_VISIT, SEX, AGE
   , CHARLSON_AGE_BASE
       + MI + CHF + CVD + PVD + DEMENTIA + COPD + RHEUMDIS + PEPULCER 
       + (CASE WHEN MSVLIVDIS > 0 THEN 0 ELSE MILDLIVDIS END)
@@ -588,7 +691,7 @@ SELECT cohort_name, PATIENT_NUM, LAST_VISIT, AGE
       + DIABETES_WTCC + HEMIPARAPLEG + RENALDIS + CANCER + MSVLIVDIS + METASTATIC + AIDSHIV AS CHARLSON_INDEX
   , MI, CHF, CVD, PVD, DEMENTIA, COPD, RHEUMDIS, PEPULCER, MILDLIVDIS, DIABETES_NOCC, DIABETES_WTCC, HEMIPARAPLEG, RENALDIS, CANCER, MSVLIVDIS, METASTATIC, AIDSHIV
 FROM (
-SELECT cohort_name, PATIENT_NUM, AGE, LAST_VISIT, CHARLSON_AGE_BASE
+SELECT cohort_name, PATIENT_NUM, SEX, AGE, LAST_VISIT, CHARLSON_AGE_BASE
   , MAX(CASE WHEN CHARLSON_CATGRY = 'MI'            THEN CHARLSON_WT ELSE 0 END) AS MI
   , MAX(CASE WHEN CHARLSON_CATGRY = 'CHF'           THEN CHARLSON_WT ELSE 0 END) AS CHF
   , MAX(CASE WHEN CHARLSON_CATGRY = 'CVD'           THEN CHARLSON_WT ELSE 0 END) AS CVD
@@ -608,8 +711,8 @@ SELECT cohort_name, PATIENT_NUM, AGE, LAST_VISIT, CHARLSON_AGE_BASE
   , MAX(CASE WHEN CHARLSON_CATGRY = 'AIDSHIV'       THEN CHARLSON_WT ELSE 0 END) AS AIDSHIV
 FROM (
   /* FOR EACH VISIT - PULL PREVIOUS YEAR OF DIAGNOSIS FACTS JOINED TO CHARLSON CATEGORIES - EXTRACTING CHARLSON CATGRY/WT */
-  SELECT cohort_name, O.PATIENT_NUM, O.AGE, O.LAST_VISIT, O.CHARLSON_AGE_BASE, C.CHARLSON_CATGRY, C.CHARLSON_WT
-  FROM (SELECT DISTINCT cohort_name, F.PATIENT_NUM, CONCEPT_CD, V.AGE, V.LAST_VISIT, V.CHARLSON_AGE_BASE 
+  SELECT cohort_name, O.PATIENT_NUM, O.SEX, O.AGE, O.LAST_VISIT, O.CHARLSON_AGE_BASE, C.CHARLSON_CATGRY, C.CHARLSON_WT
+  FROM (SELECT DISTINCT cohort_name, F.PATIENT_NUM, CONCEPT_CD, V.SEX, V.AGE, V.LAST_VISIT, V.CHARLSON_AGE_BASE 
         FROM OBSERVATION_FACT F 
           JOIN #CHARLSON_VISIT_BASE V 
             ON F.PATIENT_NUM = V.PATIENT_NUM
@@ -617,13 +720,13 @@ FROM (
        )O
     JOIN #CHARLSON_DX C
       ON O.CONCEPT_CD = C.CONCEPT_CD
-  GROUP BY cohort_name, O.PATIENT_NUM, O.AGE, O.LAST_VISIT, O.CHARLSON_AGE_BASE, C.CHARLSON_CATGRY, C.CHARLSON_WT
+  GROUP BY cohort_name, O.PATIENT_NUM, O.SEX, O.AGE, O.LAST_VISIT, O.CHARLSON_AGE_BASE, C.CHARLSON_CATGRY, C.CHARLSON_WT
   UNION /* IF NO CHARLSON DX FOUND IN ABOVE INNER JOINS WE CAN UNION TO JUST THE ENCOUNTER+AGE_BASE RECORD WITH CHARLSON FIELDS NULLED OUT
            THIS IS MORE PERFORMANT (SHORTCUT) THAN A LEFT JOIN IN THE OBSERVATION-CHARLSON JOIN ABOVE */
-  SELECT cohort_name, V2.PATIENT_NUM, V2.AGE, V2.LAST_VISIT, V2.CHARLSON_AGE_BASE, NULL, NULL
+  SELECT cohort_name, V2.PATIENT_NUM, V2.SEX, V2.AGE, V2.LAST_VISIT, V2.CHARLSON_AGE_BASE, NULL, NULL
   FROM #CHARLSON_VISIT_BASE V2
   )DXU
-  GROUP BY cohort_name, PATIENT_NUM, AGE, LAST_VISIT, CHARLSON_AGE_BASE
+  GROUP BY cohort_name, PATIENT_NUM, SEX, AGE, LAST_VISIT, CHARLSON_AGE_BASE
 )cci
 )ccisum
 
@@ -765,7 +868,7 @@ INSERT INTO dbo.loyalty_dev_summary (cohort_name, [SITE], [LOOKBACK_YR], GENDER_
 , [Mammography], [PapTest], [PSATest], [Colonoscopy], [FecalOccultTest], [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit]
 , [MDVisit_pname2], [MDVisit_pname3], [Routine_care_2], [Subjects_NoCriteria], [PredictiveScoreCutoff]
 , [MEAN_10YRPROB], [MEDIAN_10YR_SURVIVAL], [MODE_10YRPROB], [STDEV_10YRPROB], [TotalSubjects]
-, TotalSubjectsFemale, TotalSubjectsMale, AverageFactCount)
+, TotalSubjectsFemale, TotalSubjectsMale, PercentSubjectsFemale, PercentSubjectsMale, AverageFactCount)
 SELECT DISTINCT COHORTAGG.cohort_name, @site, @lookbackYears, IIF(@gendered=0,'N','Y') as GENDER_DENOMINATORS_YN, COHORTAGG.CUTOFF_FILTER_YN, Summary_Description, COHORTAGG.AGEGRP as tablename, Num_DX1, Num_DX2, MedUse1, MedUse2
   , Mammography, PapTest, PSATest, Colonoscopy, FecalOccultTest, FluShot, PneumococcalVaccine, BMI, A1C, MedicalExam, INP1_OPT1_Visit, OPT2_Visit, ED_Visit
   , MDVisit_pname2, MDVisit_pname3, Routine_care_2, Subjects_NoCriteria
@@ -774,6 +877,8 @@ SELECT DISTINCT COHORTAGG.cohort_name, @site, @lookbackYears, IIF(@gendered=0,'N
   , TotalSubjects
   , TotalSubjectsFemale
   , TotalSubjectsMale
+  , PercentSubjectsFemale
+  , PercentSubjectsMale
   , FC.AVG_FACT_COUNT as AverageFactCount
 FROM (
 /* FILTERED BY PREDICTIVE CUTOFF */
@@ -805,7 +910,9 @@ sum(cast([Routine_Care_2] as int)) as Routine_care_2,
 SUM(CAST(~(Num_Dx1|Num_Dx2|MedUse1|Mammography|PapTest|PSATest|Colonoscopy|FecalOccultTest|FluShot|PneumococcalVaccine|BMI|
   A1C|MedicalExam|INP1_OPT1_Visit|OPT2_Visit|ED_Visit|MDVisit_pname2|MDVisit_pname3|Routine_Care_2) AS INT)) as Subjects_NoCriteria, /* inverted bitwise OR of all bit flags */
 SUM(IIF(SEX='F',1.0,0.0)) AS TotalSubjectsFemale,
-SUM(IIF(SEX='M',1.0,0.0)) AS TotalSubjectsMale
+SUM(IIF(SEX='M',1.0,0.0)) AS TotalSubjectsMale,
+NULL AS PercentSubjectsFemale,
+NULL AS PercentSubjectsMale
 from #cohort_agegrp CAG JOIN #AGEGRP_PSC P 
   ON CAG.AGEGRP = P.AGEGRP 
   AND CAG.Predicted_score >= P.PredictiveScoreCutoff
@@ -839,8 +946,10 @@ count(patient_num) as TotalSubjects,
 100*avg(cast([Routine_Care_2] as numeric(2,1))) as Routine_care_2,
 100*AVG(CAST(~(Num_Dx1|Num_Dx2|MedUse1|Mammography|PapTest|PSATest|Colonoscopy|FecalOccultTest|FluShot|PneumococcalVaccine|BMI|
   A1C|MedicalExam|INP1_OPT1_Visit|OPT2_Visit|ED_Visit|MDVisit_pname2|MDVisit_pname3|Routine_Care_2) AS NUMERIC(2,1))) as Subjects_NoCriteria, /* inverted bitwise OR of all bit flags */
-100*AVG(IIF(SEX='F',1.0,0.0)) AS TotalSubjectsFemale,
-100*AVG(IIF(SEX='M',1.0,0.0)) AS TotalSubjectsMale
+NULL AS TotalSubjectsFemale,
+NULL AS TotalSubjectsMale,
+100*AVG(IIF(SEX='F',1.0,0.0)) AS PercentSubjectsFemale,
+100*AVG(IIF(SEX='M',1.0,0.0)) AS PercentSubjectsMale
 from #cohort_agegrp CAG JOIN #AGEGRP_PSC P 
   ON CAG.AGEGRP = P.AGEGRP 
   AND CAG.Predicted_score >= P.PredictiveScoreCutoff
@@ -876,7 +985,9 @@ sum(cast([Routine_Care_2] as int)) as Routine_care_2,
 SUM(CAST(~(Num_Dx1|Num_Dx2|MedUse1|Mammography|PapTest|PSATest|Colonoscopy|FecalOccultTest|FluShot|PneumococcalVaccine|BMI|
   A1C|MedicalExam|INP1_OPT1_Visit|OPT2_Visit|ED_Visit|MDVisit_pname2|MDVisit_pname3|Routine_Care_2) AS INT)) as Subjects_NoCriteria, /* inverted bitwise OR of all bit flags */
 SUM(IIF(SEX='F',1.0,0.0)) AS TotalSubjectsFemale,
-SUM(IIF(SEX='M',1.0,0.0)) AS TotalSubjectsMale
+SUM(IIF(SEX='M',1.0,0.0)) AS TotalSubjectsMale,
+NULL AS PercentSubjectsFemale,
+NULL AS PercentSubjectsMale
 from #cohort_agegrp CAG
 group by CAG.cohort_name, CAG.AGEGRP
 UNION ALL
@@ -907,8 +1018,10 @@ count(patient_num) as TotalSubjects,
 100*avg(cast([Routine_Care_2] as numeric(2,1))) as Routine_care_2,
 100*AVG(CAST(~(Num_Dx1|Num_Dx2|MedUse1|Mammography|PapTest|PSATest|Colonoscopy|FecalOccultTest|FluShot|PneumococcalVaccine|BMI|
   A1C|MedicalExam|INP1_OPT1_Visit|OPT2_Visit|ED_Visit|MDVisit_pname2|MDVisit_pname3|Routine_Care_2) AS NUMERIC(2,1))) as Subjects_NoCriteria, /* inverted bitwise OR of all bit flags */
-100*AVG(IIF(SEX='F',1.0,0.0)) AS TotalSubjectsFemale,
-100*AVG(IIF(SEX='M',1.0,0.0)) AS TotalSubjectsMale
+NULL AS TotalSubjectsFemale,
+NULL AS TotalSubjectsMale,
+100*AVG(IIF(SEX='F',1.0,0.0)) AS PercentSubjectsFemale,
+100*AVG(IIF(SEX='M',1.0,0.0)) AS PercentSubjectsMale
 from #cohort_agegrp CAG
 group by CAG.cohort_name, CAG.AGEGRP 
 )COHORTAGG
@@ -927,13 +1040,43 @@ group by CAG.cohort_name, CAG.AGEGRP
 SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
 RAISERROR(N'Final Summary Table - Rows: %d - Total Execution (ms): %d - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
 
--- Add obfuscated patient counts to the percent 11/10/21
---update s set TotalSubjects=s2.TotalSubjects + FLOOR(ABS(BINARY_CHECKSUM(NEWID())/2147483648.0)*(10*2+1)) - 10,
---  TotalSubjectsMale=s2.TotalSubjectsMale + FLOOR(ABS(BINARY_CHECKSUM(NEWID())/2147483648.0)*(10*2+1)) - 10,
---  TotalSubjectsFemale=s2.TotalSubjectsFemale + FLOOR(ABS(BINARY_CHECKSUM(NEWID())/2147483648.0)*(10*2+1)) - 10
---  from dbo.loyalty_dev_summary as s inner join dbo.loyalty_dev_summary as s2 on s.tablename=s2.tablename
---  where s.Summary_Description='PercentOfSubjects' and s2.Summary_Description='Patient Counts'
+/* Populate slice PercentPopulation */
+;WITH PERC_POPULATION AS (
+SELECT LDS.COHORT_NAME, LDS.LOOKBACK_YR, LDS.GENDER_DENOMINATORS_YN, LDS.CUTOFF_FILTER_YN, LDS.TABLENAME
+  ,  100*(CASE WHEN tablename = 'All Patients' THEN 1.0
+      WHEN tablename = 'Over 65'
+        THEN 1.0*TotalSubjects/LAG(TotalSubjects,1,NULL) OVER (ORDER BY LDS.COHORT_NAME, LDS.LOOKBACK_YR, LDS.GENDER_DENOMINATORS_YN, LDS.CUTOFF_FILTER_YN, LDS.TABLENAME)
+      WHEN tablename = 'Under 65'
+      THEN 1.0*TotalSubjects/LAG(TotalSubjects,2,NULL) OVER (ORDER BY LDS.COHORT_NAME, LDS.LOOKBACK_YR, LDS.GENDER_DENOMINATORS_YN, LDS.CUTOFF_FILTER_YN, LDS.TABLENAME)
+      END
+    ) as PercPopulation
+FROM DBO.loyalty_dev_summary LDS
+WHERE Summary_Description = 'PercentOfSubjects' 
+  AND LDS.LOOKBACK_YR = @lookbackYears
+  AND LDS.GENDER_DENOMINATORS_YN =  IIF(@gendered=0,'N','Y')
+  AND LDS.[SITE] = @site
+  AND LDS.COHORT_NAME IN (SELECT COHORT_NAME FROM #COHORT_FILTER)
+)
+UPDATE DBO.loyalty_dev_summary
+SET PercentPopulation = P.PercPopulation
+FROM DBO.loyalty_dev_summary LDS JOIN PERC_POPULATION P
+  ON LDS.Summary_Description = 'PercentOfSubjects'
+  AND LDS.LOOKBACK_YR = P.LOOKBACK_YR
+  AND LDS.GENDER_DENOMINATORS_YN = P.GENDER_DENOMINATORS_YN
+  AND LDS.CUTOFF_FILTER_YN = P.CUTOFF_FILTER_YN
+  AND LDS.COHORT_NAME = P.COHORT_NAME
+  AND LDS.tablename = P.tablename
 
+/* AFTER PercentPopulation is calculated the 'PercentOfSubjects' records should no longer store the TotalSubjects value - to prevent accidental sharing of this datapoint */
+UPDATE DBO.loyalty_dev_summary
+SET TotalSubjects = NULL
+WHERE Summary_Description = 'PercentOfSubjects' 
+  AND LOOKBACK_YR = @lookbackYears
+  AND GENDER_DENOMINATORS_YN =  IIF(@gendered=0,'N','Y')
+  AND [SITE] = @site
+  AND COHORT_NAME IN (SELECT COHORT_NAME FROM #COHORT_FILTER)
+
+/* CALCULATE THE SLICE RUNTIME AND ADD IT TO THE SUMMARY TABLE */
 UPDATE [dbo].[loyalty_dev_summary]
 SET RUNTIMEms = @ENDRUNTIMEms
 FROM [dbo].[loyalty_dev_summary] LDS
@@ -946,34 +1089,50 @@ FROM [dbo].[loyalty_dev_summary] LDS
 SET @STEPTTS = GETDATE()
 
 -- jgk 8/4/21: Expose the cohort tables for analytics. Keep in mind it is fairly large. 
-IF OBJECT_ID(N'DBO.loyalty_dev', N'U') IS NOT NULL DROP TABLE DBO.loyalty_dev;
-select @lookbackYears as lookbackYears, c.* into DBO.loyalty_dev from #cohort_agegrp c;
-IF OBJECT_ID(N'DBO.loyalty_charlson_dev', N'U') IS NOT NULL DROP TABLE DBO.loyalty_charlson_dev;
-select @lookbackYears as lookbackYears, c.* into DBO.loyalty_charlson_dev from #COHORT_CHARLSON c;
+--IF OBJECT_ID(N'DBO.loyalty_dev', N'U') IS NOT NULL DROP TABLE DBO.loyalty_dev; /* previous versions wiped this table out each run - convert to slicewise delete */
+
+DELETE FROM dbo.loyalty_dev
+WHERE lookbackYears = @lookbackYears
+  AND GENDER_DENOMINATORS_YN = IIF(@gendered=0,'N','Y')
+  AND [SITE]=@site
+  AND cohort_name IN (SELECT COHORT_NAME FROM #COHORT_FILTER)
+
+INSERT INTO DBO.LOYALTY_DEV ([lookbackYears], [GENDER_DENOMINATORS_YN], [cohort_name], [patient_num], [index_dt], [sex], [age], [AGEGRP], [Num_Dx1], [Num_Dx2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], [FecalOccultTest], [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3], [Routine_Care_2], [Predicted_score])
+select @lookbackYears as lookbackYears, IIF(@gendered=0,'N','Y') AS GENDER_DENOMINATORS_YN, [cohort_name], [patient_num], [index_dt], [sex], [age], [AGEGRP], [Num_Dx1], [Num_Dx2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], [FecalOccultTest], [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3], [Routine_Care_2], [Predicted_score]
+from #cohort_agegrp c
+WHERE AGEGRP != 'All Patients'; /* DROP OUT THE ALL PATIENTS DUPLICATES PRESENT IN AGEGRP PARTITIONS */
+
+--IF OBJECT_ID(N'DBO.loyalty_charlson_dev', N'U') IS NOT NULL DROP TABLE DBO.loyalty_charlson_dev; /* previous versions wiped this table out each run - convert to slicewise delete */
+
+DELETE FROM dbo.loyalty_charlson_dev
+WHERE lookbackYears = @lookbackYears
+  AND GENDER_DENOMINATORS_YN = IIF(@gendered=0,'N','Y')
+  AND [SITE]=@site
+  AND cohort_name IN (SELECT COHORT_NAME FROM #COHORT_FILTER)
+
+INSERT into DBO.loyalty_charlson_dev ([lookbackYears], [GENDER_DENOMINATORS_YN], [cohort_name], [PATIENT_NUM], [LAST_VISIT], [SEX], [AGE], [AGEGRP], [CHARLSON_INDEX], [CHARLSON_10YR_SURVIVAL_PROB], [MI], [CHF], [CVD], [PVD], [DEMENTIA], [COPD], [RHEUMDIS], [PEPULCER], [MILDLIVDIS], [DIABETES_NOCC], [DIABETES_WTCC], [HEMIPARAPLEG], [RENALDIS], [CANCER], [MSVLIVDIS], [METASTATIC], [AIDSHIV])
+select @lookbackYears as lookbackYears, IIF(@gendered=0,'N','Y'), [cohort_name], [PATIENT_NUM], [LAST_VISIT], [SEX], [AGE], [AGEGRP], [CHARLSON_INDEX], [CHARLSON_10YR_SURVIVAL_PROB], [MI], [CHF], [CVD], [PVD], [DEMENTIA], [COPD], [RHEUMDIS], [PEPULCER], [MILDLIVDIS], [DIABETES_NOCC], [DIABETES_WTCC], [HEMIPARAPLEG], [RENALDIS], [CANCER], [MSVLIVDIS], [METASTATIC], [AIDSHIV] 
+from #COHORT_CHARLSON c
+WHERE AGEGRP != 'All Patients'; /* DROP OUT THE ALL PATIENTS DUPLICATES PRESENT IN AGEGRP PARTITIONS */
 
 SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
-RAISERROR(N'Final Summary Table - Rows: %d - Total Execution (ms): %d - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
+RAISERROR(N'Procedure completed - Total Execution (ms): %d', 1, 1, @ENDRUNTIMEms) with nowait;
 
 /* FINAL OUTPUT FOR SHARED SPREADSHEET */
-if(@output=1) /* Only if Output parameter was passed */
+if(@output=1) /* Only if Output parameter was passed true - In general it's expected that the ExtractFullReport would be run to calculate several different cohorts/lookbacks etc. Then run a final output from that script */
   SELECT DISTINCT LDS.COHORT_NAME, LDS.[SITE], LDS.[EXTRACT_DTTM], LDS.[LOOKBACK_YR], LDS.GENDER_DENOMINATORS_YN, LDS.[CUTOFF_FILTER_YN], LDS.[Summary_Description], LDS.[tablename], LDS.[Num_DX1], LDS.[Num_DX2], LDS.[MedUse1], LDS.[MedUse2]
-  , LDS.[Mammography], LDS.[PapTest], LDS.[PSATest], LDS.[Colonoscopy], LDS.[FecalOccultTest], LDS.[FluShot], LDS.[PneumococcalVaccine], LDS.[BMI], LDS.[A1C], LDS.[MedicalExam], LDS.[INP1_OPT1_Visit], LDS.[OPT2_Visit], LDS.[ED_Visit]
-  , LDS.[MDVisit_pname2], LDS.[MDVisit_pname3], LDS.[Routine_care_2], LDS.[Subjects_NoCriteria], LDS.[PredictiveScoreCutoff]
-  , LDS.[MEAN_10YRPROB], LDS.[MEDIAN_10YR_SURVIVAL], LDS.[MODE_10YRPROB], LDS.[STDEV_10YRPROB]
-  , 100*(CASE WHEN tablename = 'All Patients' THEN 1.0
-       WHEN tablename = 'Over 65'
-         THEN 1.0*TotalSubjects/LAG(TotalSubjects,1,NULL) OVER (ORDER BY LDS.FILTER_BY_COHORT_YN, LDS.COHORT_NAME, LDS.CUTOFF_FILTER_YN, LDS.TABLENAME)
-       WHEN tablename = 'Under 65'
-        THEN 1.0*TotalSubjects/LAG(TotalSubjects,2,NULL) OVER (ORDER BY LDS.FILTER_BY_COHORT_YN, LDS.COHORT_NAME, LDS.CUTOFF_FILTER_YN, LDS.TABLENAME)
-       END) as PercPopulation
-  , LDS.TotalSubjectsFemale AS PercentFemale
-  , LDS.TotalSubjectsMale   AS PercentMale
-  , LDS.AverageFactCount
-  , LDS.[RUNTIMEms]
-FROM [dbo].[loyalty_dev_summary] lds
-WHERE LDS.Summary_Description = 'PercentOfSubjects' 
-  AND LDS.LOOKBACK_YR = @lookbackYears
-  AND LDS.GENDER_DENOMINATORS_YN =  IIF(@gendered=0,'N','Y')
-  AND LDS.[SITE] = @site
-  AND LDS.COHORT_NAME IN (SELECT COHORT_NAME FROM #COHORT_FILTER)
-ORDER BY LDS.COHORT_NAME, LDS.CUTOFF_FILTER_YN, LDS.TABLENAME;
+    , LDS.[Mammography], LDS.[PapTest], LDS.[PSATest], LDS.[Colonoscopy], LDS.[FecalOccultTest], LDS.[FluShot], LDS.[PneumococcalVaccine], LDS.[BMI], LDS.[A1C], LDS.[MedicalExam], LDS.[INP1_OPT1_Visit], LDS.[OPT2_Visit], LDS.[ED_Visit]
+    , LDS.[MDVisit_pname2], LDS.[MDVisit_pname3], LDS.[Routine_care_2], LDS.[Subjects_NoCriteria], LDS.[PredictiveScoreCutoff]
+    , LDS.[MEAN_10YRPROB], LDS.[MEDIAN_10YR_SURVIVAL], LDS.[MODE_10YRPROB], LDS.[STDEV_10YRPROB]
+    , LDS.PercentPopulation
+    , LDS.PercentSubjectsFemale
+    , LDS.PercentSubjectsMale
+    , LDS.AverageFactCount
+    , LDS.[RUNTIMEms]
+  FROM [dbo].[loyalty_dev_summary] lds
+  WHERE LDS.Summary_Description = 'PercentOfSubjects' 
+    AND LDS.LOOKBACK_YR = @lookbackYears
+    AND LDS.GENDER_DENOMINATORS_YN =  IIF(@gendered=0,'N','Y')
+    AND LDS.[SITE] = @site
+    AND LDS.COHORT_NAME IN (SELECT COHORT_NAME FROM #COHORT_FILTER)
+  ORDER BY LDS.COHORT_NAME, LDS.CUTOFF_FILTER_YN, LDS.TABLENAME;

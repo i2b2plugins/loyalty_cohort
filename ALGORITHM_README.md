@@ -8,17 +8,19 @@ Implements a loyalty cohort algorithm with the same general design defined in
 
 ## Outline of algorithm
 
-1. Select all patients with **any** non-demographic fact that is listed in the concept_dimension between 1/1/2012 and the specified index date.
+1. Select all patients in the cohort filter with **any** non-demographic fact that is listed in the concept_dimension between 1/1/2012 and the specified index date.
+2. Remove 'ephemeral patients' - patients with only one visit.
+4. Remove patients <18 - the criteria in the algorithm are not compatible with a pediatric population.
 
-2. Determine which patients had visits of the required types between the index date and the index date minus the specified number of lookback years.
+3. Determine which patients had visits of the required types between the index date and the index date minus the specified number of lookback years.
 
-3. Determine which patients have facts of the required types between the index date and the index date minus the specified number of lookback years.
+4. Determine which patients have facts of the required types between the index date and the index date minus the specified number of lookback years.
 
-4. Compute average fact counts.
+5. Compute average fact counts.
 
-5. Compute Charlson score (by examining a set of diagnoses).
+6. Compute Charlson score (by examining a set of diagnoses).
 
-6. Save the final cohort table (`loyalty_dev`), Charlson scores (`loyalty_charlson_dev`), and generate summary statistics (loyalty_dev_summary) on the patients in the top quintile for highest loyalty score.
+7. Save the final cohort table (`loyalty_dev`), Charlson scores (`loyalty_charlson_dev`), and generate summary statistics (loyalty_dev_summary) on the patients in the top quintile for highest loyalty score.
 
 ## Variables and their coefficients
 

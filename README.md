@@ -33,7 +33,8 @@ INSERT INTO @cfilter (PATIENT_NUM, COHORT_NAME, INDEX_DT)
  FROM [FourCE_LocalPatientSummary] /*  4CE X.2 COHORT FOR EXAMPLE */
 ```
 2) Customize the following statement and execute on your database to compute the loyalty cohort.
-		 ``EXEC [dbo].[usp_LoyaltyCohort_opt] @site='UKY', @lookbackYears=1,  @demographic_facts=1, @gendered=0, @filter_by_existing_cohort=0, @cohort_filter=@cfilter, @output=0 ``
+		 ``EXEC [dbo].[usp_LoyaltyCohort_opt] @site='UKY', @lookbackYears=1,  @demographic_facts=1, @gendered=0,  @cohort_filter=@cfilter, @output=0 ``
+  Note that steps 1-2 must be run in the same transaction.
 3) Execute the following statement on your database to print the output that can be shared:
 	select * from loyalty_dev_summary where Summary_Description='PercentOfSubjects'
 

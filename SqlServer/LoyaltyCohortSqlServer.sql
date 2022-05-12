@@ -5,10 +5,10 @@
 IF OBJECT_ID(N'DBO.usp_LoyaltyCohort_opt') IS NOT NULL DROP PROCEDURE DBO.usp_LoyaltyCohort_opt
 GO
 
-DROP TYPE DBO.udt_CohortFilter;
+--DROP TYPE DBO.udt_CohortFilter;
 
-CREATE TYPE DBO.udt_CohortFilter AS TABLE (PATIENT_NUM INT, COHORT_NAME VARCHAR(100), INDEX_DT DATE)
-GO
+--CREATE TYPE DBO.udt_CohortFilter AS TABLE (PATIENT_NUM INT, COHORT_NAME VARCHAR(100), INDEX_DT DATE)
+--GO
 
 
 /* Implements a loyalty cohort algorithm with the same general design defined in 
@@ -182,6 +182,7 @@ IF OBJECT_ID(N'dbo.loyalty_charlson_dev', N'U') IS NULL
 IF OBJECT_ID(N'tempdb..#COHORT_FILTER', N'U') IS NOT NULL DROP TABLE #COHORT_FILTER;
 IF OBJECT_ID(N'tempdb..#DEMCONCEPT', N'U') IS NOT NULL DROP TABLE #DEMCONCEPT;
 IF OBJECT_ID(N'tempdb..#INCLPAT', N'U') IS NOT NULL DROP TABLE #INCLPAT;
+IF OBJECT_ID(N'tempdb..#INCLPAT_MULTIVISIT', N'U') IS NOT NULL DROP TABLE #INCLPAT_MULTIVISIT;
 IF OBJECT_ID(N'tempdb..#NUM_DX_CODES', N'U') IS NOT NULL DROP TABLE #NUM_DX_CODES;
 IF OBJECT_ID(N'tempdb..#MEDUSE_CODES', N'U') IS NOT NULL DROP TABLE #MEDUSE_CODES;
 IF OBJECT_ID(N'tempdb..#VARIABLE_EXPANSION', N'U') IS NOT NULL DROP TABLE #VARIABLE_EXPANSION;
@@ -230,7 +231,7 @@ inner join #cohort_filter c on c.patient_num=v.patient_num
 WHERE v.PATIENT_NUM NOT IN (SELECT v.PATIENT_NUM FROM DBO.VISIT_DIMENSION v inner join #cohort_filter c on c.patient_num=v.patient_num GROUP BY v.PATIENT_NUM HAVING COUNT(DISTINCT ENCOUNTER_NUM) = 1) /* EXCLUDES EPHEMERAL ONE-VISIT PATIENTS */
 )
 SELECT DISTINCT A.PATIENT_NUM
-INTO #INLCPAT_MULTIVISIT
+INTO #INCLPAT_MULTIVISIT
 FROM CTE_MULTVISIT A
   LEFT JOIN CTE_MULTVISIT B
     ON A.PATIENT_NUM = B.PATIENT_NUM
@@ -289,7 +290,7 @@ BEGIN
   WHERE CONVERT(DATE,F.START_DATE) BETWEEN '20120101' AND CF.INDEX_DT
   )OFMINUSDEM
   INTERSECT
-  SELECT PATIENT_NUM FROM #INLCPAT_MULTIVISIT /* FILTER BY THE NON-EPHEMERAL PATIENT LIST */
+  SELECT PATIENT_NUM FROM #INCLPAT_MULTIVISIT /* FILTER BY THE NON-EPHEMERAL PATIENT LIST */
 
   SET @ROWS = @@ROWCOUNT
 
@@ -308,7 +309,7 @@ BEGIN
       ON CF.PATIENT_NUM = F.PATIENT_NUM
   WHERE CONVERT(DATE,F.START_DATE) BETWEEN '20120101' AND CF.INDEX_DT
   INTERSECT
-  SELECT PATIENT_NUM FROM #INLCPAT_MULTIVISIT /* FILTER BY THE NON-EPHEMERAL PATIENT LIST */
+  SELECT PATIENT_NUM FROM #INCLPAT_MULTIVISIT /* FILTER BY THE NON-EPHEMERAL PATIENT LIST */
 
   SET @ROWS = @@ROWCOUNT
 END
@@ -522,7 +523,8 @@ SET @STEPTTS = GETDATE()
 SELECT * 
 INTO #cohort_agegrp
 FROM (
-select cohort_name
+select @site as [SITE]
+,cohort_name
 ,patient_num
 ,index_dt
 ,sex
@@ -552,7 +554,8 @@ select cohort_name
 ,Predicted_score      AS Predicted_score
 from #cohort
 UNION 
-select cohort_name
+select @site as [SITE]
+,cohort_name
 ,patient_num
 ,index_dt
 ,sex
@@ -591,7 +594,7 @@ SET @STEPTTS = GETDATE()
 SELECT cohort_name, AGEGRP, MIN(PREDICTED_SCORE) PredictiveScoreCutoff
 INTO #AGEGRP_PSC
 FROM (
-SELECT cohort_name, AGEGRP, Predicted_score, NTILE(5) OVER (PARTITION BY AGEGRP ORDER BY PREDICTED_SCORE DESC) AS ScoreRank
+SELECT cohort_name, AGEGRP, Predicted_score, NTILE(5) OVER (PARTITION BY COHORT_NAME, AGEGRP ORDER BY PREDICTED_SCORE DESC) AS ScoreRank
 FROM(
 SELECT cohort_name, AGEGRP, predicted_score
 from #cohort_agegrp
@@ -671,7 +674,7 @@ SELECT cohort_name, PATIENT_NUM, SEX, AGE, LAST_VISIT, CHARLSON_AGE_BASE
 INTO #CHARLSON_VISIT_BASE
 FROM CTE_VISIT_BASE
 
-SELECT cohort_name, PATIENT_NUM
+SELECT @site as [SITE], cohort_name, PATIENT_NUM
   , LAST_VISIT
   , SEX
   , AGE
@@ -1098,8 +1101,8 @@ WHERE lookbackYears = @lookbackYears
   AND [SITE]=@site
   AND cohort_name IN (SELECT COHORT_NAME FROM #COHORT_FILTER)
 
-INSERT INTO DBO.LOYALTY_DEV ([lookbackYears], [GENDER_DENOMINATORS_YN], [cohort_name], [patient_num], [index_dt], [sex], [age], [AGEGRP], [Num_Dx1], [Num_Dx2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], [FecalOccultTest], [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3], [Routine_Care_2], [Predicted_score])
-select @lookbackYears as lookbackYears, IIF(@gendered=0,'N','Y') AS GENDER_DENOMINATORS_YN, [cohort_name], [patient_num], [index_dt], [sex], [age], [AGEGRP], [Num_Dx1], [Num_Dx2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], [FecalOccultTest], [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3], [Routine_Care_2], [Predicted_score]
+INSERT INTO DBO.LOYALTY_DEV ([lookbackYears], [GENDER_DENOMINATORS_YN], [SITE], [cohort_name], [patient_num], [index_dt], [sex], [age], [AGEGRP], [Num_Dx1], [Num_Dx2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], [FecalOccultTest], [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3], [Routine_Care_2], [Predicted_score])
+select @lookbackYears as lookbackYears, IIF(@gendered=0,'N','Y') AS GENDER_DENOMINATORS_YN,  [SITE], [cohort_name], [patient_num], [index_dt], [sex], [age], [AGEGRP], [Num_Dx1], [Num_Dx2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], [FecalOccultTest], [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3], [Routine_Care_2], [Predicted_score]
 from #cohort_agegrp c
 WHERE AGEGRP != 'All Patients'; /* DROP OUT THE ALL PATIENTS DUPLICATES PRESENT IN AGEGRP PARTITIONS */
 
@@ -1111,8 +1114,8 @@ WHERE lookbackYears = @lookbackYears
   AND [SITE]=@site
   AND cohort_name IN (SELECT COHORT_NAME FROM #COHORT_FILTER)
 
-INSERT into DBO.loyalty_charlson_dev ([lookbackYears], [GENDER_DENOMINATORS_YN], [cohort_name], [PATIENT_NUM], [LAST_VISIT], [SEX], [AGE], [AGEGRP], [CHARLSON_INDEX], [CHARLSON_10YR_SURVIVAL_PROB], [MI], [CHF], [CVD], [PVD], [DEMENTIA], [COPD], [RHEUMDIS], [PEPULCER], [MILDLIVDIS], [DIABETES_NOCC], [DIABETES_WTCC], [HEMIPARAPLEG], [RENALDIS], [CANCER], [MSVLIVDIS], [METASTATIC], [AIDSHIV])
-select @lookbackYears as lookbackYears, IIF(@gendered=0,'N','Y'), [cohort_name], [PATIENT_NUM], [LAST_VISIT], [SEX], [AGE], [AGEGRP], [CHARLSON_INDEX], [CHARLSON_10YR_SURVIVAL_PROB], [MI], [CHF], [CVD], [PVD], [DEMENTIA], [COPD], [RHEUMDIS], [PEPULCER], [MILDLIVDIS], [DIABETES_NOCC], [DIABETES_WTCC], [HEMIPARAPLEG], [RENALDIS], [CANCER], [MSVLIVDIS], [METASTATIC], [AIDSHIV] 
+INSERT into DBO.loyalty_charlson_dev ([lookbackYears], [GENDER_DENOMINATORS_YN],  [SITE], [cohort_name], [PATIENT_NUM], [LAST_VISIT], [SEX], [AGE], [AGEGRP], [CHARLSON_INDEX], [CHARLSON_10YR_SURVIVAL_PROB], [MI], [CHF], [CVD], [PVD], [DEMENTIA], [COPD], [RHEUMDIS], [PEPULCER], [MILDLIVDIS], [DIABETES_NOCC], [DIABETES_WTCC], [HEMIPARAPLEG], [RENALDIS], [CANCER], [MSVLIVDIS], [METASTATIC], [AIDSHIV])
+select @lookbackYears as lookbackYears, IIF(@gendered=0,'N','Y'),  [SITE], [cohort_name], [PATIENT_NUM], [LAST_VISIT], [SEX], [AGE], [AGEGRP], [CHARLSON_INDEX], [CHARLSON_10YR_SURVIVAL_PROB], [MI], [CHF], [CVD], [PVD], [DEMENTIA], [COPD], [RHEUMDIS], [PEPULCER], [MILDLIVDIS], [DIABETES_NOCC], [DIABETES_WTCC], [HEMIPARAPLEG], [RENALDIS], [CANCER], [MSVLIVDIS], [METASTATIC], [AIDSHIV] 
 from #COHORT_CHARLSON c
 WHERE AGEGRP != 'All Patients'; /* DROP OUT THE ALL PATIENTS DUPLICATES PRESENT IN AGEGRP PARTITIONS */
 

@@ -1,34 +1,93 @@
 --select * from observation_fact where concept_cd like 'ICD10%';
 -- is pname2 = 2 and pname3 >-3?
+-- Explicitly clear out table when you are ready
+--select * from loyalty_dev_summary;
 
+declare
+v_sql LONG;
+begin
+
+v_sql:='create table loyalty_dev_summary
+  (
+    COHORT_NAME varchar2(30) NULL,
+    SITE VARCHAR(10) NOT NULL,
+    LOOKBACK_YR number(10) NOT NULL,
+    GENDER_DENOMINATORS_YN char(1) NOT NULL,
+    CUTOFF_FILTER_YN char(1) NOT NULL,
+    Summary_Description varchar(20) NOT NULL,
+	tablename varchar(20) NULL,
+	Num_DX1 number NULL,
+	Num_DX2 number NULL,
+	MedUse1 number NULL,
+	MedUse2 number NULL,
+	Mammography number NULL,
+	PapTest number NULL,
+	  PSATest number NULL,
+	  Colonoscopy number NULL,
+	  FecalOccultTest number NULL,
+	  FluShot number NULL,
+	  PneumococcalVaccine number NULL,
+	  BMI number NULL,
+	  A1C number NULL,
+	  MedicalExam number NULL,
+	  INP1_OPT1_Visit number NULL,
+	  OPT2_Visit number NULL,
+	  ED_Visit number NULL,
+	  MDVisit_pname2 number NULL,
+	  MDVisit_pname3 number NULL,
+	  Routine_care_2 number NULL,
+	  Subjects_NoCriteria number NULL,
+	  PredictiveScoreCutoff number NULL,
+	  MEAN_10YRPROB number NULL,
+	  MEDIAN_10YR_SURVIVAL number NULL,
+	  MODE_10YRPROB number NULL,
+	  STDEV_10YRPROB number NULL,
+    TotalSubjects number NULL,
+    TotalSubjectsFemale number NULL,
+    TotalSubjectsMale number NULL,
+    percentsubjectsfemale char(10),
+    percentsubjectsmale  char(10))';
+    --percentpopulatin
+    --averagefactcount
+    --extract_dttm
+execute immediate v_sql;
+
+EXCEPTION
+    WHEN OTHERS THEN
+      IF SQLCODE = -955 THEN
+        NULL; -- suppresses ORA-00955 exception
+      ELSE
+         RAISE;
+      END IF;
+END;
+/
 -- Set variables
-define indexDate = '01-FEB-2021';--415215
-define lookbackYears = 10 (number);
-define gendered = 1;
-define showOutput = 1;
-define demFactDate = '01-JAN-2012';
-define site = 'UPitt' (varchar2(50));
+
+drop table constants;
 CREATE TABLE 
 CONSTANTS (
 INDEXDATE DATE,
 LOOKBACKYEARS NUMBER(2),
 SHOWOUTPUT NUMBER(1),
 DEMFACTDATE DATE,
-SITE VARCHAR2(100)
+SITE VARCHAR2(100),
+GENDERED NUMBER(1)
 );
-
+--20220331
+truncate table constants;
 INSERT INTO CONSTANTS 
 SELECT 
-TO_DATE('01-FEB-2021') AS INDEXDATE,
-10 lookbackYears,
-1 AS showOutput,
-TO_DATE('01-JAN-2012') AS demFactDate,
-'UPitt' AS Site 
+TO_DATE('&1') AS INDEXDATE, --TO_DATE('31-MAR-2022') AS INDEXDATE,
+TO_NUMBER('&2') AS lookbackYears,
+TO_NUMBER('&3') AS  showOutput,
+TO_DATE('&4') AS demFactDate,
+'&5' AS Site,
+TO_NUMBER('&6') AS GENDERED
 FROM DUAL;
-
+COMMIT;
 select * from constants;
 commit;
-set define off
+--set define off
 --TODO: Audit the xref tables for typos and new paths
 --when to drop dead - don't drop - add another column to table to filter on later 
 --if 2 and 3 do you only get the one flag is 2 = keep provider not null 
@@ -40,22 +99,36 @@ DROP TABLE LOYALTY_COHORT_AGEGRP;
 --select sum(freq) from (
 --select predicted_score, count(*) freq from LOYALTY_COHORT_AGEGRP group by predicted_score order by predicted_score;
 --);-- where predicted_score = -0.010; --460850 -- i don't have any patients with predicted score 0, 20901 -0.01 means they have no features
-select * from LOYALTY_COHORT_AGEGRP;
+--select * from LOYALTY_COHORT_AGEGRP order by predicted_score desc;
+--LOYALTY_DEV
+--207 sec
+DROP TABLE LOYALTY_COHORT_AGEGRP;
 CREATE TABLE LOYALTY_COHORT_AGEGRP AS 
 SELECT * FROM (
 --The cohort is any patient that has had a visit during the time period
 --Get patient's last visit during time period
-WITH COHORT_IN_PERIOD AS
+--MICHELE change this to match darrens cohort and then eliminate the effemoral patiens
+WITH VISIT_ONTOLOGY AS 
+( 
+SELECT * FROM NCATS_VISIT_DETAILS  --ACT_VISIT_DETAILS_V4 c -- THIS NEEDS TO POINT TO METADATA SCHEMA
+),
+--select * from visit_ontology;
+COHORT_IN_PERIOD AS
 (
 -- in covid_crcdata
-SELECT PATIENT_NUM, MAX(START_DATE) LAST_VISIT 
-FROM VISIT_DIMENSION V
---WHERE V.START_DATE between add_months( trunc(to_date('&indexDate')), -12*to_number('&lookbackYears')) and to_date('&indexDate')
-WHERE V.START_DATE between add_months( trunc(to_date('01-FEB-2021')), -12*to_number('5')) and to_date('01-FEB-2021')
-GROUP BY PATIENT_NUM
+SELECT V.PATIENT_NUM, MAX(V.START_DATE) LAST_VISIT, COHORT_NAME
+FROM LOYALTY_COHORT c
+JOIN synthea_addon_vis_dim V ON V.PATIENT_NUM = C.PATIENT_NUM
+CROSS JOIN CONSTANTS x
+--WHERE V.START_DATE between add_months( trunc(to_date('&indexDate')), -12*X.LOOKBACKYEARS) and to_date('&indexDate')
+WHERE V.START_DATE between add_months( trunc(X.INDEXDATE), -12*X.LOOKBACKYEARS) and X.INDEXDATE
+GROUP BY C.COHORT_NAME, V.PATIENT_NUM
 
-)--select count(*) from COHORT_IN_PERIOD; --433334
-,--436482
+),
+--select * from LOYALTY_COHORT; 
+--select * from constants;
+--select count(*) from LOYALTY_COHORT; --433334
+--436482
 --select count(*) from COHORT_IN_PERIOD;
 --Get codes for observation_fact facts
 SIMPLE_FEATURES AS ( 
@@ -72,7 +145,7 @@ ORDER BY FEATURE_NAME),
 -- Get codes for visit_dimension facts
 VISIT_FEATURES AS ( 
 select distinct FEATURE_NAME, C_BASECODE CONCEPT_CD, code_type  
-from xref_LoyaltyCode_paths L, NCATS_VISIT_DETAILS C --ACT_VISIT_DETAILS_V4 c -- THIS NEEDS TO POINT TO METADATA SCHEMA
+from xref_LoyaltyCode_paths L, VISIT_ONTOLOGY C
 where C.C_FULLNAME like L.Act_path||'%'  
 AND code_type IN ('VISIT') 
 and (act_path <> '**Not Found' and act_path is not null)
@@ -114,7 +187,7 @@ select feature_name, concept_cd, code_type  from SIMPLE_FEATURES
 --Create demographic feature codes - do not use dates because demographic facts are not date based
 PT_DEM_FEATURE_COUNT_BY_DATE AS ( 
 SELECT PATIENT_NUM, FEATURE_NAME,  COUNT(DISTINCT TRUNC(O.START_DATE)) DISTINCT_ENCOUNTERS, COEFF
-FROM OBSERVATION_FACT O
+FROM synthea_obs_fact O
 JOIN FEATURES F ON F.CONCEPT_CD = O.CONCEPT_CD
 JOIN xref_LoyaltyCode_PSCoeff C ON C.FIELD_NAME = F.FEATURE_NAME
 WHERE FEATURE_NAME = 'Demographics' 
@@ -125,7 +198,7 @@ ORDER BY PATIENT_NUM, FEATURE_NAME
 --Get visit counts and the coefficients
 PT_VIS_FEATURE_COUNT_BY_DATE AS ( -- VISIT WITHIN TIME FRAME OF INTEREST
 SELECT PATIENT_NUM, FEATURE_NAME,  COUNT(DISTINCT TRUNC(V.START_DATE)) DISTINCT_ENCOUNTERS, C.COEFF
-FROM VISIT_DIMENSION V
+FROM synthea_addon_vis_dim V
 JOIN VISIT_FEATURES F ON F.CONCEPT_CD = V.INOUT_CD
 JOIN xref_LoyaltyCode_PSCoeff C ON C.FIELD_NAME = F.FEATURE_NAME
 CROSS JOIN CONSTANTS x
@@ -147,12 +220,12 @@ CASE
 END COEFF
 FROM PT_VIS_FEATURE_COUNT_BY_DATE
 ),
---select * from ADJ_PT_VIS_FEATURE_COUNT_BY_DATE;-- where patient_num = 82146
+--select * from ADJ_PT_VIS_FEATURE_COUNT_BY_DATE);-- where patient_num = 82146
 
 --Get the observation_fact feature counts and the coefficients
 PT_FEATURE_COUNT_BY_DATE AS (
 SELECT PATIENT_NUM, FEATURE_NAME,  COUNT(DISTINCT TRUNC(O.START_DATE)) DISTINCT_ENCOUNTERS, COEFF
-FROM OBSERVATION_FACT O
+FROM synthea_obs_fact O
 CROSS JOIN CONSTANTS x
 JOIN FEATURES F ON F.CONCEPT_CD = O.CONCEPT_CD
 JOIN xref_LoyaltyCode_PSCoeff C ON C.FIELD_NAME = F.FEATURE_NAME
@@ -169,13 +242,14 @@ SELECT PATIENT_NUM,
 FEATURE_NAME, 
 DISTINCT_ENCOUNTERS,
 CASE 
-    WHEN FEATURE_NAME = 'MDVisit_pname2' AND DISTINCT_ENCOUNTERS < 2 THEN 0
+    WHEN FEATURE_NAME = 'MDVisit_pname2' AND DISTINCT_ENCOUNTERS <> 2  THEN 0
     WHEN FEATURE_NAME = 'MDVisit_pname3' AND DISTINCT_ENCOUNTERS < 3 THEN 0
     ELSE COEFF
 END COEFF,
 COEFF OLD_COEFF
 FROM PT_FEATURE_COUNT_BY_DATE
-),
+), 
+--select * from MD_PX_VISITS_WITH_PROVIDER where feature_name like 'MDV%');
 
 --Adjust the rest of the count based features when condition is not met coeff = 0
 -- can this be reordered so all of these are in one block
@@ -185,6 +259,8 @@ FEATURE_NAME,
 DISTINCT_ENCOUNTERS,
 CASE 
     WHEN FEATURE_NAME = 'Routine_Care_2' AND DISTINCT_ENCOUNTERS < 2 THEN 0
+    WHEN FEATURE_NAME = 'Num_DX1' AND DISTINCT_ENCOUNTERS > 1 THEN 0
+    WHEN FEATURE_NAME = 'MedUse1' AND DISTINCT_ENCOUNTERS > 1 THEN 0
     WHEN FEATURE_NAME = 'Num_DX2' AND DISTINCT_ENCOUNTERS < 2 THEN 0
     WHEN FEATURE_NAME = 'MedUse2' AND DISTINCT_ENCOUNTERS < 2 THEN 0
     ELSE COEFF
@@ -192,7 +268,7 @@ END COEFF,
 COEFF OLD_COEFF
 FROM PT_FEATURE_COUNT_BY_DATE
 ),
---select * from ADJ_PT_FEATURE_COUNT_BY_DATE;
+--select * from ADJ_PT_FEATURE_COUNT_BY_DATE);
 
 --merge all features from demographics (always zero coeff) + visit based features + observation_fact based features
 ALL_FEATURE_COUNT_BY_DATE AS (
@@ -256,6 +332,7 @@ SELECT * FROM
 PREDICTIVE_SCORE AS 
 (
 select 
+V.COHORT_NAME,
 S.PATIENT_NUM,
 case when raw_coeff <> 0 then 1 else 0 end as Subjects_NoCriteria,
 --raw_coeff as Subjects_NoCriteria,  when showing full coeff
@@ -290,7 +367,7 @@ nvl(Num_Dx1    ,0)          AS Num_Dx1
 ,nvl(Routine_Care_2,0)       AS Routine_Care_2     
 from COEFF_SUMS S 
 LEFT JOIN COHORT_IN_PERIOD V ON V.PATIENT_NUM = S.PATIENT_NUM
-LEFT JOIN PATIENT_DIMENSION D ON D.PATIENT_NUM = S.PATIENT_NUM
+LEFT JOIN SYNTHEA_ADDON_PAT_DIM D ON D.PATIENT_NUM = S.PATIENT_NUM
 LEFT JOIN PIVOT_PATIENTS P ON P.PATIENT_NUM = S.PATIENT_NUM
 ),
 
@@ -305,7 +382,7 @@ select count(distinct patient_num) TOTAL_PATIENT_FEMALE from PREDICTIVE_SCORE wh
 ),
 TOTAL_PATIENTS_MALE AS --189482
 (
-select count(distinct patient_num) TOTAL_PATIENT_MALE from PREDICTIVE_SCORE where SEX_CD = 'M' and Subjects_NoCriteria <> 0
+select count(distinct patient_num) TOTAL_PATIENT_MALE from PREDICTIVE_SCORE where SEX_CD =  'M' and Subjects_NoCriteria <> 0
 ),
 TOTAL_NO_CRITERIA AS --189482
 (
@@ -314,6 +391,7 @@ select count(distinct patient_num) TOTAL_NO_CRITERIA from PREDICTIVE_SCORE where
 
 --Final table
 SELECT
+    COHORT_NAME,
     p.patient_num,
     birth_date,
     Subjects_NoCriteria,
@@ -355,8 +433,8 @@ FROM
 ); --END CREATE TABLE LOYALTY_COHORT_AGEGRP
 
 COMMIT;
-
--- Calculate Predictive Score Cutoff by over Agegroups 
+--SELECT * FROM LOYALTY_COHORT_AGEGRP ;--where rownum < 10;
+-- Calculate Predictive Score Cutoff by over Agegroups  QUINTILE of DECILE???
 drop table LOYALTY_AGEGRP_PSC;
 CREATE TABLE LOYALTY_AGEGRP_PSC AS SELECT AGEGRP, MIN(PREDICTED_SCORE) PredictiveScoreCutoff
 FROM (
@@ -368,33 +446,40 @@ from LOYALTY_cohort_agegrp
 )M
 WHERE ScoreRank=1
 GROUP BY AGEGRP;
-
+COMMIT;
+--select * from LOYALTY_AGEGRP_PSC;
 
 -- Calculate average fact counts over Agegroups 
+--71SEC
 drop table LOYALTY_AGEGRP_AFC;
 --select * from LOYALTY_AGEGRP_AFC;
 CREATE TABLE LOYALTY_AGEGRP_AFC AS 
-SELECT CUTOFF_FILTER_YN, AGEGRP, AVG_FACT_COUNT
+SELECT CUTOFF_FILTER_YN, AGEGRP, TRUNC(AVG_FACT_COUNT,2) AVG_FACT_CNT
 FROM
 (
 SELECT CAST('N' AS CHAR(1)) AS CUTOFF_FILTER_YN, cag.AGEGRP, 1.0*count(o.concept_cd)/count(distinct cag.patient_num) as AVG_FACT_COUNT
 FROM LOYALTY_cohort_agegrp cag
-  join OBSERVATION_FACT O
-    ON cag.patient_num = O.PATIENT_NUM
-WHERE O.START_DATE between add_months( trunc(to_date('&indexDate')), -12*to_number('&lookbackYears')) and to_date('&indexDate')
+CROSS JOIN CONSTANTS x
+  join synthea_obs_fact O  ON cag.patient_num = O.PATIENT_NUM
+WHERE    O.START_DATE between add_months( trunc(X.INDEXDATE), -12*X.LOOKBACKYEARS) and X.INDEXDATE
 group by cag.AGEGRP
 UNION ALL
-SELECT CAST('Y' AS CHAR(1)) AS CUTOFF_FILTER_YN, cag.AGEGRP, 1.0*count(o.concept_cd)/count(distinct cag.patient_num) as AVG_FACT_COUNT
+SELECT CAST('Y' AS CHAR(1)) AS CUTOFF_FILTER_YN, cag.AGEGRP, 
+1.0*count(o.concept_cd)/count(distinct cag.patient_num) as AVG_FACT_COUNT
 FROM LOYALTY_cohort_agegrp cag
+CROSS JOIN CONSTANTS x
   JOIN loyalty_AGEGRP_PSC PSC
     ON cag.AGEGRP = PSC.AGEGRP
       AND cag.Predicted_score >= PSC.PredictiveScoreCutoff
-  join OBSERVATION_FACT O
+  join synthea_obs_fact O
     ON cag.patient_num = O.PATIENT_NUM
-WHERE O.START_DATE between add_months( trunc(to_date('&indexDate')), -12*to_number('&lookbackYears')) and to_date('&indexDate')
+WHERE    O.START_DATE between add_months( trunc(X.INDEXDATE), -12*X.LOOKBACKYEARS) and X.INDEXDATE
 group by cag.AGEGRP
 )AFC;
 
+
+--select count(*) from synthea_obs_fact; --71511691
+--SELECT * FROM LOYALTY_AGEGRP_AFC;
 --***********************************************************************************************************
 
 /* OPTIONAL CHARLSON COMORBIDITY INDEX -- ADDS APPROX. 1m in UKY environment. 
@@ -403,25 +488,30 @@ group by cag.AGEGRP
 -- NEED TO ADD INCLUSION OF LOCAL CODE SYNONYMS
 DEFINE STEPTTS = sysdate;
 --SELECT * FROM ncatstest2_metadata.aCT_ICD10CM_DX_V4;
-SELECT * FROM LOYALTY_CHARLSON_DX;
+--SELECT * FROM LOYALTY_CHARLSON_DX;
 
 DROP TABLE LOYALTY_CHARLSON_DX;
+CREATE INDEX LU_CHARLSON_pat ON LU_CHARLSON(DIAGPATTERN);
+--SELECT * FROM LU_CHARLSON;
+create table LU_CHARLSON_ORACLE AS SELECT CHARLSON_CATGRY, CHARLSON_WT, REGEXP_REPLACE(DIAGPATTERN, '%','') DIAGPATTERN FROM LU_CHARLSON;
+COMMIT;
+--SELECT * FROM LU_CHARLSON_ORACLE;
+RENAME LOYALTY_CHARLSON_DX TO LOYALTY_CHARLSON_DX_CD;
 CREATE TABLE LOYALTY_CHARLSON_DX AS
-SELECT DISTINCT CHARLSON_CATGRY, CHARLSON_WT, CONCEPT_CD AS CONCEPT_CD
+SELECT DISTINCT CHARLSON_CATGRY, CHARLSON_WT, C_BASECODE AS CONCEPT_CD
 FROM (
-SELECT C.CHARLSON_CATGRY, C.CHARLSON_WT, DX10.CONCEPT_CD
-FROM LU_CHARLSON C
-  --JOIN ACT_ICD10CM_DX_V4 DX10
-  JOIN CONCEPT_DIMENSION DX10
-    ON REGEXP_LIKE(DX10.CONCEPT_CD, C.DIAGPATTERN)-- regexp_like (concept_cd,'ICD10CM:I09\.9.*')
-UNION ALL
-SELECT C.CHARLSON_CATGRY, C.CHARLSON_WT, DX9.CONCEPT_CD
-FROM LU_CHARLSON C
-  --JOIN ACT_ICD9CM_DX_V4 DX9
-  JOIN CONCEPT_DIMENSION DX9
-    ON DX9.CONCEPT_CD LIKE C.DIAGPATTERN
-)C;
+SELECT C.CHARLSON_CATGRY, C.CHARLSON_WT, DX10.C_BASECODE
+FROM LU_CHARLSON_ORACLE C
+  JOIN ncatstest_metadata.ACT_ICD10CM_DX_V4 DX10
+    ON REGEXP_LIKE(DX10.C_BASECODE, C.DIAGPATTERN));
 
+insert into LOYALTY_CHARLSON_DX
+SELECT C.CHARLSON_CATGRY, C.CHARLSON_WT, DX9.C_BASECODE CONCEPT_CD
+FROM LU_CHARLSON_ORACLE C
+  JOIN ncatstest_metadata.ACT_ICD9CM_DX_V4 DX9
+    ON REGEXP_LIKE(DX9.C_BASECODE, C.DIAGPATTERN);
+
+commit;
 --SELECT * FROM LOYALTY_CHARLSON_DX;
 DROP TABLE LOYALTY_CHARLSON_VISIT_BASE;
 CREATE TABLE  LOYALTY_CHARLSON_VISIT_BASE AS
@@ -454,7 +544,8 @@ SELECT PATIENT_NUM
   , POWER( 0.983
       , POWER(2.71828, (CASE WHEN CHARLSON_INDEX > 7 THEN 7 ELSE CHARLSON_INDEX END) * 0.9)
       ) * 100.0 AS CHARLSON_10YR_SURVIVAL_PROB
-  , MI, CHF, CVD, PVD, DEMENTIA, COPD, RHEUMDIS, PEPULCER, MILDLIVDIS, DIABETES_NOCC, DIABETES_WTCC, HEMIPARAPLEG, RENALDIS, CANCER, MSVLIVDIS, METASTATIC, AIDSHIV
+  , MI, CHF, CVD, PVD, DEMENTIA, COPD, RHEUMDIS, PEPULCER, MILDLIVDIS, DIABETES_NOCC, 
+  DIABETES_WTCC, HEMIPARAPLEG, RENALDIS, CANCER, MSVLIVDIS, METASTATIC, AIDSHIV
 FROM (
 SELECT PATIENT_NUM, LAST_VISIT, AGE
   , CHARLSON_AGE_BASE
@@ -486,9 +577,8 @@ FROM (
   /* FOR EACH VISIT - PULL PREVIOUS YEAR OF DIAGNOSIS FACTS JOINED TO CHARLSON CATEGORIES - EXTRACTING CHARLSON CATGRY/WT */
   SELECT O.PATIENT_NUM, O.AGE, O.LAST_VISIT, O.CHARLSON_AGE_BASE, C.CHARLSON_CATGRY, C.CHARLSON_WT
   FROM (SELECT DISTINCT F.PATIENT_NUM, CONCEPT_CD, V.AGE, V.LAST_VISIT, V.CHARLSON_AGE_BASE 
-        FROM OBSERVATION_FACT F 
-          JOIN LOYALTY_CHARLSON_VISIT_BASE V 
-            ON F.PATIENT_NUM = V.PATIENT_NUM
+        FROM synthea_obs_fact F 
+          JOIN LOYALTY_CHARLSON_VISIT_BASE V ON F.PATIENT_NUM = V.PATIENT_NUM
             --AND F.START_DATE BETWEEN DATEADD(YY,-1,V.LAST_VISIT) AND V.LAST_VISIT
             AND F.START_DATE BETWEEN  ADD_MONTHS( TRUNC(V.LAST_VISIT), -12) AND  V.LAST_VISIT
        )O
@@ -507,7 +597,7 @@ FROM (
 
 /* CHARLSON 10YR PROB MEDIAN/MEAN/MODE/STDEV */
 --SET @STEPTTS = GETDATE();
-SELECT * FROM LOYALTY_COHORT_CHARLSON;
+--SELECT * FROM LOYALTY_COHORT_CHARLSON;
 /* UNFILTERED BY PSC */
 DROP TABLE LOYALTY_CHARLSON_STATS;
 CREATE TABLE LOYALTY_CHARLSON_STATS AS 
@@ -551,7 +641,7 @@ WHERE AGEGRP <> '-'
 )MS, CTE_MEAN_STDEV_MODE S
 WHERE MS.AGEGRP = S.AGEGRP
 GROUP BY MS.AGEGRP, MEDIAN_10YR_SURVIVAL, S.MODE_10YRPROB, S.STDEV_10YRPROB, S.MEAN_10YRPROB);
-
+SELECT * FROM LOYALTY_CHARLSON_STATS;
 /* FILTERED BY PSC */
 INSERT INTO LOYALTY_CHARLSON_STATS
 SELECT AGEGRP,CUTOFF_FILTER_YN,MEDIAN_10YR_SURVIVAL,MEAN_10YRPROB,
@@ -608,55 +698,19 @@ WHERE MS.AGEGRP = S.AGEGRP
 GROUP BY MS.AGEGRP, MEDIAN_10YR_SURVIVAL, S.MODE_10YRPROB, S.STDEV_10YRPROB, S.MEAN_10YRPROB
 );
 COMMIT;
---SELECT * FROM LOYALTY_CHARLSON_STATS;
+SELECT * FROM LOYALTY_CHARLSON_STATS;
 
 --TODO: make this conditional
 -- create summary table
-drop table loyalty_dev_summary;
-select * from loyalty_dev_summary;
-CREATE TABLE loyalty_dev_summary(
-    SITE VARCHAR(10) NOT NULL,
-    LOOKBACK_YR number(10) NOT NULL,
-    GENDER_DENOMINATORS_YN char(1) NOT NULL,
-    CUTOFF_FILTER_YN char(1) NOT NULL,
-	  Summary_Description varchar(20) NOT NULL,
-	  tablename varchar(20) NULL,
-	  Num_DX1 number NULL,
-	  Num_DX2 number NULL,
-	  MedUse1 number NULL,
-	  MedUse2 number NULL,
-	  Mammography number NULL,
-	  PapTest number NULL,
-	  PSATest number NULL,
-	  Colonoscopy number NULL,
-	  FecalOccultTest number NULL,
-	  FluShot number NULL,
-	  PneumococcalVaccine number NULL,
-	  BMI number NULL,
-	  A1C number NULL,
-	  MedicalExam number NULL,
-	  INP1_OPT1_Visit number NULL,
-	  OPT2_Visit number NULL,
-	  ED_Visit number NULL,
-	  MDVisit_pname2 number NULL,
-	  MDVisit_pname3 number NULL,
-	  Routine_care_2 number NULL,
-	  Subjects_NoCriteria number NULL,
-	  PredictiveScoreCutoff number NULL,
-	  MEAN_10YRPROB number NULL,
-	  MEDIAN_10YR_SURVIVAL number NULL,
-	  MODE_10YRPROB number NULL,
-	  STDEV_10YRPROB number NULL,
-    TotalSubjects number NULL,
-    TotalSubjectsFemale number NULL,
-    TotalSubjectsMale number NULL,
-    percentfemale char(10),
-    percentmale  char(10));
-    
+--drop table loyalty_dev_summary;
+--select * from loyalty_dev_summary;
+
     
 -- Add to summary table for output
-INSERT INTO loyalty_dev_summary 
-select    site,
+--INSERT INTO loyalty_dev_summary 
+select 
+    COHORT_NAME,
+    site,
     lookback_yr,
     gender_denominators_yn,
     cutoff_filter_yn,
@@ -693,24 +747,10 @@ select    site,
     totalsubjectsmale,
     percentfemale,
     percentmale from (
-with loyalty_table as (
-SELECT '&site' site, to_number('&lookbackYears') lookback_yr, '&gendered' as GENDER_DENOMINATORS_YN, 
-    COHORTAGG.CUTOFF_FILTER_YN, 
-    Summary_Description, CS.AGEGRP as tablename, Num_DX1, Num_DX2, MedUse1, MedUse2
-  , Mammography, PapTest, PSATest, Colonoscopy, FecalOccultTest, FluShot, PneumococcalVaccine, 
-    BMI, A1C, MedicalExam, INP1_OPT1_Visit, OPT2_Visit, ED_Visit
-  , MDVisit_pname2, MDVisit_pname3, Routine_care_2, Subjects_NoCriteria
-  , CASE WHEN COHORTAGG.CUTOFF_FILTER_YN = 'Y' THEN CP.PredictiveScoreCutoff ELSE NULL END AS PredictiveScoreCutoff
-  , CS.MEAN_10YRPROB
-  , CS.MEDIAN_10YR_SURVIVAL
-  , CS.MODE_10YRPROB
-  , CS.STDEV_10YRPROB
-  , COHORTAGG.TotalSubjects
-  , COHORTAGG.TotalSubjectsFemale
-  , COHORTAGG.TotalSubjectsMale
-FROM (
+with cohortagg as (
 --FILTERED BY PREDICTIVE CUTOFF 
 SELECT
+COHORT_NAME,
 'Y' AS CUTOFF_FILTER_YN,
 'Patient Counts' as Summary_Description,
 CAG.AGEGRP, 
@@ -719,12 +759,12 @@ sum(Num_DX1) as Num_DX1,
 sum(Num_DX2) as Num_DX2,
 sum(MedUse1)  as MedUse1,
 sum(MedUse2)  as MedUse2,
-sum(CASE WHEN to_number('&gendered')=1 and sex_cd='F' THEN  Mammography  
-           WHEN to_number('&gendered')=0 THEN Mammography ELSE NULL END ) AS Mammography,
-sum(CASE WHEN to_number('&gendered')=1 and sex_cd='F' THEN PapTest 
-           WHEN to_number('&gendered')=0 THEN PapTest ELSE NULL END ) AS PapTest,
-sum(CASE WHEN to_number('&gendered')=1 and sex_cd='M' THEN PSATEST 
-           WHEN to_number('&gendered')=0 THEN PSATEST ELSE NULL END) AS PSATEST,
+sum(CASE WHEN X.GENDERED=1 and sex_cd='F' THEN  Mammography  
+           WHEN X.GENDERED=0 THEN Mammography ELSE NULL END ) AS Mammography,
+sum(CASE WHEN X.GENDERED=1 and sex_cd='F' THEN PapTest 
+           WHEN X.GENDERED=0 THEN PapTest ELSE NULL END ) AS PapTest,
+sum(CASE WHEN X.GENDERED=1 and sex_cd='M' THEN PSATEST 
+           WHEN X.GENDERED=0 THEN PSATEST ELSE NULL END) AS PSATEST,
 sum(Colonoscopy)  as Colonoscopy,
 sum(FecalOccultTest)  as FecalOccultTest,
 sum(FluShot)  as FluShot,
@@ -739,13 +779,15 @@ sum(MDVisit_pname2)  as MDVisit_pname2,
 sum(MDVisit_pname3)  as MDVisit_pname3,
 sum(Routine_Care_2)  as Routine_Care_2,
 sum(Subjects_NoCriteria) as Subjects_NoCriteria, 
-sum(CASE WHEN to_number('&gendered')=1 and sex_cd='F' THEN 1 END) AS TotalSubjectsFemale,
-sum(CASE WHEN to_number('&gendered')=1 and sex_cd='M' THEN 1 END) AS TotalSubjectsMale
+sum(CASE WHEN X.GENDERED=1 and sex_cd='F' THEN 1 END) AS TotalSubjectsFemale,
+sum(CASE WHEN X.GENDERED=1 and sex_cd='M' THEN 1 END) AS TotalSubjectsMale
 from loyalty_cohort_agegrp CAG 
+CROSS JOIN CONSTANTS X
 JOIN loyalty_AGEGRP_PSC P ON CAG.AGEGRP = P.AGEGRP AND CAG.Predicted_score >= P.PredictiveScoreCutoff
-group by CAG.AGEGRP
+group by COHORT_NAME, CAG.AGEGRP
 UNION ALL
 SELECT
+COHORT_NAME,
 'Y' AS CUTOFF_FILTER_YN,
 'PercentOfSubjects' as Summary_Description,
 CAG.AGEGRP, 
@@ -754,12 +796,12 @@ count(distinct patient_num) as TotalSubjects,
 100*avg(Num_Dx2) as Num_DX2,
 100*avg(MedUse1)  as MedUse1,
 100*avg(MedUse2) as MedUse2,
-100*avg(CASE WHEN to_number('&gendered')=1 and sex_cd='F' THEN  Mammography  
-           WHEN to_number('&gendered')=0 THEN Mammography ELSE NULL END ) AS Mammography,
-100*avg(CASE WHEN to_number('&gendered')=1 and sex_cd='F' THEN PapTest 
-           WHEN to_number('&gendered')=0 THEN PapTest ELSE NULL END ) AS PapTest,
-100*avg(CASE WHEN to_number('&gendered')=1 and sex_cd='M' THEN PSATEST 
-           WHEN to_number('&gendered')=0 THEN PSATEST ELSE NULL END) AS PSATEST,
+100*avg(CASE WHEN X.GENDERED=1 and sex_cd='F' THEN  Mammography  
+           WHEN X.GENDERED=0 THEN Mammography ELSE NULL END ) AS Mammography,
+100*avg(CASE WHEN X.GENDERED=1 and sex_cd='F' THEN PapTest 
+           WHEN X.GENDERED=0 THEN PapTest ELSE NULL END ) AS PapTest,
+100*avg(CASE WHEN X.GENDERED=1 and sex_cd='M' THEN PSATEST 
+           WHEN X.GENDERED=0 THEN PSATEST ELSE NULL END) AS PSATEST,
 100*avg(Colonoscopy) as Colonoscopy,
 100*avg(FecalOccultTest) as FecalOccultTest,
 100*avg(FluShot) as  FluShot,
@@ -776,11 +818,14 @@ count(distinct patient_num) as TotalSubjects,
 100*avg(Subjects_NoCriteria) as Subjects_NoCriteria,  
 count(CASE WHEN sex_cd='F' THEN  patient_num ELSE NULL END) AS TotalSubjectsFemale,
 count(CASE WHEN sex_cd='M' THEN  patient_num ELSE NULL END) AS TotalSubjectsMale
-from loyalty_cohort_agegrp CAG JOIN loyalty_AGEGRP_PSC P ON CAG.AGEGRP = P.AGEGRP AND CAG.Predicted_score >= P.PredictiveScoreCutoff
-group by CAG.AGEGRP
+from loyalty_cohort_agegrp CAG 
+CROSS JOIN CONSTANTS X
+JOIN loyalty_AGEGRP_PSC P ON CAG.AGEGRP = P.AGEGRP AND CAG.Predicted_score >= P.PredictiveScoreCutoff
+group by COHORT_NAME, CAG.AGEGRP
 UNION ALL
 --UNFILTERED -- ALL QUINTILES 
 SELECT
+COHORT_NAME,
 'N' AS CUTOFF_FILTER_YN,
 'Patient Counts' as Summary_Description,
 CAG.AGEGRP, 
@@ -789,12 +834,12 @@ sum(Num_Dx1) as Num_DX1,
 sum(Num_Dx2) as Num_DX2,
 sum(MedUse1)  as MedUse1,
 sum(MedUse2) as MedUse2,
-SUM(CASE WHEN to_number('&gendered')=1 and sex_cd='F' THEN Mammography 
-           WHEN to_number('&gendered')=0 THEN Mammography  ELSE NULL END) AS Mammography,
-SUM(CASE WHEN to_number('&gendered')=1 and sex_cd='F' THEN  PapTest 
-           WHEN to_number('&gendered')=0 THEN PapTest ELSE NULL END) AS PapTest,
-SUM(CASE WHEN to_number('&gendered')=1 and sex_cd='M' THEN PSATEST 
-           WHEN to_number('&gendered')=0 THEN PSATEST  ELSE NULL END) AS PSATEST,
+SUM(CASE WHEN X.GENDERED=1 and sex_cd='F' THEN Mammography 
+           WHEN X.GENDERED=0 THEN Mammography  ELSE NULL END) AS Mammography,
+SUM(CASE WHEN X.GENDERED=1 and sex_cd='F' THEN  PapTest 
+           WHEN X.GENDERED=0 THEN PapTest ELSE NULL END) AS PapTest,
+SUM(CASE WHEN X.GENDERED=1 and sex_cd='M' THEN PSATEST 
+           WHEN X.GENDERED=0 THEN PSATEST  ELSE NULL END) AS PSATEST,
 sum(Colonoscopy) as Colonoscopy,
 sum(FecalOccultTest) as FecalOccultTest,
 sum(FluShot) as  FluShot,
@@ -812,9 +857,11 @@ SUM(Subjects_NoCriteria) as Subjects_NoCriteria, --inverted bitwise OR of all bi
 count(CASE WHEN sex_cd='F' THEN  patient_num ELSE NULL END) AS TotalSubjectsFemale,
 count(CASE WHEN sex_cd='M' THEN  patient_num ELSE NULL END) AS TotalSubjectsMale
 from loyalty_cohort_agegrp CAG
-group by CAG.AGEGRP
+CROSS JOIN CONSTANTS X
+group by COHORT_NAME, CAG.AGEGRP
 UNION ALL
 SELECT
+COHORT_NAME,
 'N' AS PREDICTIVE_CUTOFF_FILTER_YN,
 'PercentOfSubjects' as Summary_Description,
 CAG.AGEGRP, 
@@ -823,12 +870,12 @@ count(distinct patient_num) as TotalSubjects,
 100*avg(Num_Dx2) as Num_DX2,
 100*avg(MedUse1)  as MedUse1,
 100*avg(MedUse2) as MedUse2,
-100*AVG(CASE WHEN to_number('&gendered')=1 and sex_cd='F' THEN Mammography 
-           WHEN to_number('&gendered')=0 THEN Mammography  ELSE NULL END) AS Mammography,
-100*AVG(CASE WHEN to_number('&gendered')=1 and sex_cd='F' THEN  PapTest 
-           WHEN to_number('&gendered')=0 THEN PapTest ELSE NULL END) AS PapTest,
-100*AVG(CASE WHEN to_number('&gendered')=1 and sex_cd='M' THEN PSATEST 
-           WHEN to_number('&gendered')=0 THEN PSATEST  ELSE NULL END) AS PSATEST,
+100*AVG(CASE WHEN X.GENDERED=1 and sex_cd='F' THEN Mammography 
+           WHEN X.GENDERED=0 THEN Mammography  ELSE NULL END) AS Mammography,
+100*AVG(CASE WHEN X.GENDERED=1 and sex_cd='F' THEN  PapTest 
+           WHEN X.GENDERED=0 THEN PapTest ELSE NULL END) AS PapTest,
+100*AVG(CASE WHEN X.GENDERED=1 and sex_cd='M' THEN PSATEST 
+           WHEN X.GENDERED=0 THEN PSATEST  ELSE NULL END) AS PSATEST,
 100*avg(Colonoscopy) as Colonoscopy,
 100*avg(FecalOccultTest) as FecalOccultTest,
 100*avg(FluShot) as  FluShot,
@@ -843,20 +890,43 @@ count(distinct patient_num) as TotalSubjects,
 100*avg(MDVisit_pname3) as MDVisit_pname3,
 100*avg(Routine_Care_2) as Routine_care_2,
 SUM(Subjects_NoCriteria) as Subjects_NoCriteria,  
-sum(CASE WHEN to_number('&gendered')=1 and sex_cd='F' THEN 1 END) AS TotalSubjectsFemale,
-sum(CASE WHEN to_number('&gendered')=1 and sex_cd='M' THEN 1 END) AS TotalSubjectsMale
+sum(CASE WHEN X.GENDERED=1 and sex_cd='F' THEN 1 END) AS TotalSubjectsFemale,
+sum(CASE WHEN X.GENDERED=1 and sex_cd='M' THEN 1 END) AS TotalSubjectsMale
 from loyalty_cohort_agegrp CAG
-group by CAG.AGEGRP 
-)COHORTAGG
-  JOIN loyalty_AGEGRP_PSC CP
-    ON COHORTAGG.AGEGRP = CP.AGEGRP
- JOIN loyalty_CHARLSON_STATS CS
-    ON COHORTAGG.AGEGRP = CS.AGEGRP
-      AND COHORTAGG.CUTOFF_FILTER_YN = CS.CUTOFF_FILTER_YN)
-,
+CROSS JOIN CONSTANTS X
+group by COHORT_NAME, CAG.AGEGRP  -- 4 unioned
+),
+--select TotalSubjectsFemale from cohortagg;
+loyalty_table as (
+SELECT 
+COHORT_NAME,
+    x.site site, 
+    x.lookbackyears lookback_yr, 
+    x.gendered GENDER_DENOMINATORS_YN, 
+    COHORTAGG.CUTOFF_FILTER_YN, 
+    Summary_Description, 
+    CS.AGEGRP as tablename, Num_DX1, Num_DX2, MedUse1, MedUse2
+  , Mammography, PapTest, PSATest, Colonoscopy, FecalOccultTest, FluShot, PneumococcalVaccine, 
+    BMI, A1C, MedicalExam, INP1_OPT1_Visit, OPT2_Visit, ED_Visit
+  , MDVisit_pname2, MDVisit_pname3, Routine_care_2, Subjects_NoCriteria
+  , CASE WHEN COHORTAGG.CUTOFF_FILTER_YN = 'Y' THEN CP.PredictiveScoreCutoff ELSE NULL END AS PredictiveScoreCutoff
+  , CS.MEAN_10YRPROB
+  , CS.MEDIAN_10YR_SURVIVAL
+  , CS.MODE_10YRPROB
+  , CS.STDEV_10YRPROB
+  , COHORTAGG.TotalSubjects
+  , COHORTAGG.TotalSubjectsFemale
+  , COHORTAGG.TotalSubjectsMale
+FROM COHORTAGG 
+  cross join constants x
+  JOIN loyalty_AGEGRP_PSC CP    ON COHORTAGG.AGEGRP = CP.AGEGRP
+  JOIN loyalty_CHARLSON_STATS CS ON COHORTAGG.AGEGRP = CS.AGEGRP AND COHORTAGG.CUTOFF_FILTER_YN = CS.CUTOFF_FILTER_YN),
+  --select * from loyalty_table;
+
 FINAL_LOYALTY_TABLE as
 (
 SELECT
+COHORT_NAME,
     site,
     lookback_yr,
     gender_denominators_yn,
@@ -897,7 +967,9 @@ SELECT
 FROM
     LOYALTY_TABLE
 )
-SELECT    site,
+SELECT    
+COHORT_NAME,
+    site,
     lookback_yr,
     gender_denominators_yn,
     cutoff_filter_yn,
@@ -935,8 +1007,12 @@ SELECT    site,
     percentfemale,
     percentmale 
 FROM FINAL_LOYALTY_TABLE
-order by LOOKBACK_YR, summary_description, CUTOFF_FILTER_YN, TABLENAME);
-commit;
+order by LOOKBACK_YR, summary_description, CUTOFF_FILTER_YN, TABLENAME
+);
+COMMIT;
+--select * from loyalty_cohort_agegrp where cohort_name = 'LOYALTY_TEST_DATA';
+--select count(*) from loyalty_cohort_agegrp where cohort_name is null; --705209
 
 --select * from loyalty_dev_summary;
 --describe loyalty_dev_summary;
+

@@ -1,8 +1,3 @@
--- 465s not complete
--- optional truncate
---set define on
---select * from loyalty_dev_summary;
-TRUNCATE TABLE loyalty_dev_summary;
 --set echo on;
 declare
 v_sql LONG;
@@ -25,15 +20,13 @@ EXCEPTION
       END IF;
 END;
 /
-TRUNCATE TABLE LOYALTY_COHORT;
-INSERT INTO LOYALTY_COHORT (PATIENT_NUM, COHORT_NAME, INDEXDATE)
-SELECT DISTINCT PATIENT_NUM, 'LOYALTY_TEST_DATA', TO_DATE('31-MAR-2022') FROM SYNTHEA_ADDON_PAT_DIM;
-COMMIT;
--- create a cohort table - this can be your entire data mart
---INSERT INTO @cfilter (PATIENT_NUM, COHORT_NAME, INDEX_DT)
---select distinct patient_num, substring(cohort,1,charindex('202',cohort)-1) cohort, admission_date /* grouping cohorts without YYYYQ# */
---FROM I2B2ACT.4CEX2.FourCE_LocalPatientSummary /* SOURCE OF YOUR COHORT TO FILTER BY -- 4CE X.2 COHORT FOR EXAMPLE */
 
+-- create a cohort table - this can be your entire data mart
+INSERT INTO LOYALTY_COHORT (PATIENT_NUM, COHORT_NAME, INDEXDATE)
+SELECT DISTINCT PATIENT_NUM, 'LOYALTY_COHORT_NAME', TO_DATE('31-MAR-2022') FROM PATIENT_DIMENSION;
+COMMIT;
+
+SELECT COUNT(*) NUM_IN_COHORT FROM LOYALTY_COHORT;
 
 /* if you want to use a static index_dt for all patient */
 --INSERT INTO @cfilter (PATIENT_NUM, COHORT_NAME, INDEX_DT)
@@ -42,12 +35,15 @@ COMMIT;
 
 /* Alter @site parameter to your site */
 /* If your site stores demographic facts set @demographics_facts=1, if there are no demographic facts in observation_fact set @demographic_facts=0 */
---@C:\DevTools\NCATS\ACT\Research\LoyaltyCohortOracleSynthea.sql INDEXDATE LOOKBACKYEARS SHOWOUTPUT DEMFACTDATE SITE GENDERED cutoff
-@C:\DevTools\NCATS\ACT\Research\LoyaltyCohortOracleSynthea.sql "31-MAR-2022" 10 2 "31-MAR-2012" "UPITT" 1
+--@C:\DevTools\NCATS\ACT\Research\LoyaltyCohortOracleSynthea.sql INDEXDATE LOOKBACKYEARS SHOWOUTPUT DEMFACTDATE SITE GENDERED
+@C:\DevTools\NCATS\ACT\Research\LoyaltyCohortOracleSynthea.sql "31-MAR-2022" 1 2 "31-MAR-2012" "UPITT" 0
+@C:\DevTools\NCATS\ACT\Research\LoyaltyCohortOracleSynthea.sql "31-MAR-2022" 1 2 "31-MAR-2012" "UPITT" 1
 
 commit;
 
---select * from loyalty_dev_summary;
+select * from loyalty_dev_summary where Summary_Description = 'PercentOfSubjects';
+
+
 /* share percentage data */
 /* this query is the output that should be shared across sites */
 /* do not share patient level data from the Summary_Description = 'Patient Counts' records */

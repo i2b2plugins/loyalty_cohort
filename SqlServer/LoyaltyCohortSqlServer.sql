@@ -211,7 +211,7 @@ DECLARE @OUTPUT_YN CHAR(1) = IIF(@output=0,'N','Y')
 
 RAISERROR(N'Thank you for your participation. Please contact darren.henderson@uky.edu with any questions.', 1, 1) with nowait;
 RAISERROR(N'Please be prepared to share these debug messages if your site runs into any issues.', 1, 1) with nowait;
-RAISERROR(N'STARTING ANALYIS (COHORT_FILTER RECORDS=%d) -- SITE=%s, LOOKBACK_YR=%d, GENDER_DENOMINATORS=%s, OUTPUT=%s', 1, 1,@COHORT_N,@site,@lookbackYears,@gender_yn,@output_yn) with nowait;
+RAISERROR(N'STARTING ANALYSIS (COHORT_FILTER RECORDS=%d) -- SITE=%s, LOOKBACK_YR=%d, GENDER_DENOMINATORS=%s, OUTPUT=%s', 1, 1,@COHORT_N,@site,@lookbackYears,@gender_yn,@output_yn) with nowait;
 
 DECLARE @STARTTS DATETIME = GETDATE()
 DECLARE @STEPTTS DATETIME 
@@ -1159,6 +1159,8 @@ WHERE AGEGRP != 'All Patients'; /* DROP OUT THE ALL PATIENTS DUPLICATES PRESENT 
 
 SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
 RAISERROR(N'Procedure completed - Total Execution (ms): %d', 1, 1, @ENDRUNTIMEms) with nowait;
+/* Adding a blank RAISERROR to pad between runs if using the extract full report sql */
+RAISERROR(N'', 1, 1, @ENDRUNTIMEms) with nowait;
 
 /* FINAL OUTPUT FOR SHARED SPREADSHEET */
 if(@output=1) /* Only if Output parameter was passed true - In general it's expected that the ExtractFullReport would be run to calculate several different cohorts/lookbacks etc. Then run a final output from that script */

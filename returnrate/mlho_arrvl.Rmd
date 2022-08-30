@@ -1,0 +1,285 @@
+---
+title: "MLHO_arrvl"
+output: html_notebook
+---
+
+This should be run for loyalty cohort analysis after running the loyalty score script AND the return rate script. This connects to your database and loads data via the views at the end of the return rate script.
+
+CHANGE YOUR DATABASE CONNECTION INFORMATION BELOW!
+CHANGE THE PATH TO LoyaltyCode_PSCoeff.csv BELOW!
+SET OUTPUT DIR AND SITEID BELOW!
+ 
+Issues: does not save ROC plots correctly. correlation results are output to screen and not file. testing needed. 
+
+```{r load}
+# make sure the packages are installed --> 
+#devtools::install_github("hestiri/mlho")
+if(!require(pacman)) install.packages("pacman")
+
+# This clears the global environment! Don't run this line if you need to keep your other variables around!
+rm(list=ls())
+
+library(pROC)
+library(mlho)
+library(RJDBC)
+options(java.parameters = "-Xmx8048m")
+
+# Load all the additional packages. If this fails, just library() caret, tidyverse, and ggplot2 and add others as 
+# you run into errors.
+pacman::p_load(data.table, devtools, backports, Hmisc, tidyr,dplyr,ggplot2,plyr,scales,readr,
+               httr, DT, lubridate, tidyverse,reshape2,foreach,doParallel,caret,gbm,lubridate,praznik)
+
+
+# Set an output directory and siteid
+currSiteId <- 'MGB'
+out_dir <- '~'
+
+# Load the loyalty coefficients file - set to your own path
+coeff <- readr::read_csv("~/workspace/act_loyalty/LoyaltyCode_PSCoeff.csv")
+
+# db connection for MSSQL - modify as needed
+drv <- JDBC("com.microsoft.sqlserver.jdbc.SQLServerDriver",
+            "~/R/sqljdbc4.jar",
+            identifier.quote="`")
+conn <- dbConnect(drv,
+                  "jdbc:sqlserver://db.partners.org;databaseName=ACT","user","pass")
+# ** THIS IS FOR ORACLE
+drv <- JDBC(driverClass="oracle.jdbc.OracleDriver", classPath="lib/ojdbc6.jar")
+conn <- dbConnect(jdbcDriver, "jdbc:oracle:thin:@//database.hostname.com:port/service_name_or_sid", "username", "password")
+# ** AN EXAMPLE OF USING ODBC instead of JDBC
+#library(RODBC)
+# Sys.setenv(R_MAX_NUM_DLLS = 999)
+# conn <- odbcDriverConnect('driver={SQL Server};server=sv1-sqledt;database=I2B2ACT;trusted_connection=true')
+# ** AN EXAMPLE OF LOADING FROM CSV FILES
+# data_dir <- "~/Dropbox (Partners HealthCare)/HMS/Projects/ACT/loyalty_cohorts/mgb_returnmlho"
+# dbmart <-   readr::read_csv(file.path(data_dir, "LOYALTY_MLHO_labeldt.csv"))
+# dems <-   readr::read_csv(file.path(data_dir, "LOYALTY_MLHO_demographic.csv"))
+# labeldt <-   readr::read_csv(file.path(data_dir, "LOYALTY_MLHO_dbmart1Y.csv"))
+##end of lines to modify to get your data
+
+# The views currently swap dbmart and labeldt. This swaps them back.
+labeldt <- dbGetQuery(conn,paste0("select * from [dbo].[LOYALTY_MLHO_dbmart1Y_vw]"))
+dems <- dbGetQuery(conn,paste0("select * from [dbo].[LOYALTY_MLHO_demographic_vw]"))
+dbmart <- dbGetQuery(conn,paste0("select * from [dbo].[LOYALTY_MLHO_labeldt_vw]"))
+
+```
+
+Analyze the current loyalty score and its relationship to return and Charlson index
+
+```{r}
+
+#jgk - Create decils - note that decile 1 is the lowest rank!
+dems <- dems %>% mutate(decile=ntile(Predicted_score,10))
+# Sanity check score averages by decile
+cor.dat %>% group_by(decile) %>% dplyr::summarize(aver=mean(Predicted_score))
+
+
+# Correlation
+cor.dat <- merge(labeldt,dems,by="patient_num")
+uniqpats <- c(as.character(unique(dbmart$patient_num)))
+cor.dat <- cor.dat %>% mutate(label_binary=(label>0))
+cor.dat <- cor.dat %>% mutate(rrate = label/length(uniqpats))
+
+cor.test(cor.dat$Predicted_score,cor.dat$label) # Loyalty score to return count
+cor.test(cor.dat$Predicted_score,as.numeric(cor.dat$label_binary)) # Score to return (binary)
+cor.test(cor.dat$decile,as.numeric(cor.dat$label_binary)) # Decile to return (binary)
+
+# Print averages of everything - not currently used
+for (i in colnames(cor.dat)) {
+  if (is.numeric(cor.dat[[i]])) {
+    print(paste0(i,":",mean(cor.dat[[i]])))
+  }
+}
+
+# Percent of patients with factor, multiply by coefficient. 
+dbmart %>% group_by(phenx) %>% dplyr::summarise(ct = n())
+dbmart %>% group_by(phenx) %>% dplyr::summarise(ct = n()/nrow(dems)) %>% arrange(ct)
+
+# Compute SHAP-style importance of each variable with our data and current coefficients
+# Used in importance plot at the bottom
+factor.contrib <- dbmart %>% group_by(phenx) %>% dplyr::summarise(ct = n()/nrow(dems)) %>% arrange(ct) %>% inner_join(coeff,by=c("phenx"="FIELD_NAME")) %>% mutate(contrib=ct*COEFF) %>% arrange(contrib)
+ggplot(factor.contrib %>% arrange(contrib),aes(phenx,contrib)) + geom_point() + theme(axis.text.x = element_text(angle=90))
+
+#cor.dat %>% group_by(decile) %>% dplyr::summarise(sum(label_binary)) # count of TP (returned) by decile
+#dec1 <- cor.dat %>% filter(decile==10)
+#cor.test(dec1$Predicted_score,as.numeric(dec1$label_binary)) # Score to return count for only top decile
+
+# ROC curve (uses package pROC)
+roc_binary <- cor.dat %>% roc("label_binary","Predicted_score",ci=TRUE, ci.alpha=0.9, stratified=FALSE,
+            # arguments for plot
+            plot=TRUE, auc.polygon=TRUE, max.auc.polygon=TRUE, grid=TRUE,
+            print.auc=TRUE, show.thres=TRUE)
+youden.score <- coords(roc_binary, x="best", input="threshold", best.method="youden")
+#roc_binary.ci <- ci.se(roc_binary)
+#plot(roc_binary.ci,type="bars")
+
+# BUG - saving plot doesn't work...
+png(file=paste0(out_dir,"/",currSiteId, "_rocoriginal.png"))
+plot.new()
+plot(roc_binary,print.auc=TRUE, auc.polygon=TRUE,max.auc.polygon=TRUE,type="shape")
+dev.off()
+
+# Test code plots all score vs labels
+#(p1 <- ggplot(cor.dat)+
+#    geom_point(aes(x=Predicted_score,y=label)))
+
+# Charlson Index Correlations
+cor.test(cor.dat$Predicted_score,cor.dat$CHARLSON_10YR_SURVIVAL_PROB)
+cor.test(cor.dat$Predicted_score,cor.dat$CHARLSON_INDEX)
+
+cor.test(cor.dat$decile,cor.dat$CHARLSON_INDEX) # This is the one we're reporting in the paper
+
+# More test code that plots way too many points
+# (p <- ggplot(cor.dat)+
+#   geom_point(aes(x=Predicted_score,y=CHARLSON_INDEX)))
+# (p <- ggplot(cor.dat)+
+#   geom_point(aes(x=Predicted_score,y=label)))
+# (p <- ggplot(cor.dat)+
+#   geom_point(aes(x=Predicted_score,y=label_binary)))
+
+# Mean Charlson index to mean score, grouped by index, with std. deviatin of score
+# Not currently used
+charlson.compare.summary <- cor.dat %>% group_by(CHARLSON_INDEX) %>% dplyr::summarize(mean.score = mean(Predicted_score),mean.index=mean(CHARLSON_INDEX), sd.score = sd(Predicted_score),size.score=n())
+
+# Plot of the above                                                          #ggplot(charlson.compare.summary,aes(y=mean.score,x=mean.index,size=size.score)) +  geom_point() + geom_smooth() + geom_line(aes(x=mean.index,y=mean.score+sd.score))
+
+# Decile of score vs charlson index, sized by group size - this goes in the paper
+# Similar pattern across all deciles of loyalty score. Highest loyalty contains the sickest but not all high loyalty are sick.
+charlson.compare.summary2 <- cor.dat %>% mutate(decile = ntile(Predicted_score,n=10)) %>% group_by(CHARLSON_INDEX,decile) %>% dplyr::summarize(ct=n())
+ggplot(charlson.compare.summary2,aes(y=decile,x=CHARLSON_INDEX,size=ct)) + geom_point()
+cor.dat
+
+# Alt plot that is not as good
+#ggplot(charlson.compare.summary2,aes(y=ct,x=CHARLSON_INDEX,color=decile)) + geom_line()
+
+# Number of patients at each Charlson score - not currently used
+#cor.dat %>% filter(Predicted_score > mean(cor.dat$Predicted_score)) %>% group_by(CHARLSON_INDEX) %>% dplyr::summarize(size.group=n())
+```
+
+MLHO modeling below:
+
+```{r}
+# Set up train/test data
+
+labeldt <- subset(labeldt,labeldt$patient_num %in% dems$patient_num)
+labeldt$label <- ifelse(labeldt$label >1,1,0)
+#table(labeldt$label)
+
+uniqpats <- c(as.character(unique(dbmart$patient_num)))
+#using a 70-30 ratio
+test_ind <- sample(uniqpats,
+                   round(.5*length(uniqpats)))
+
+test_labels <- subset(labeldt,labeldt$patient_num %in% c(test_ind))
+print("test set lables:")
+table(test_labels$label)
+train_labels <- subset(labeldt,!(labeldt$patient_num %in% c(test_ind)))
+print("train set lables:")
+table(train_labels$label)
+# train and test sets
+dat.train  <- subset(dbmart,!(dbmart$patient_num %in% c(test_ind)))
+dat.test <- subset(dbmart,dbmart$patient_num %in% c(test_ind))
+
+data.table::setDT(dat.train)
+dat.train[,row := .I]
+dat.train$value.var <- 1
+uniqpats.train <- c(as.character(unique(dat.train$patient_num)))
+
+##here is the application of MSMR.lite
+dat.train <- MSMSR.lite(MLHO.dat=dat.train,
+                        patients = uniqpats.train,
+                        sparsity=0.005,
+                        labels = labeldt,
+                        topn=200, multicore=FALSE)
+
+dat.test <- subset(dat.test,dat.test$phenx %in% colnames(dat.train))
+setDT(dat.test)
+dat.test[,row := .I]
+dat.test$value.var <- 1
+uniqpats.test <- c(as.character(unique(dat.test$patient_num)))
+
+dat.test <- MSMSR.lite(MLHO.dat=dat.test,patients = uniqpats.test,sparsity=NA,jmi = FALSE,labels = labeldt, multicore=FALSE)
+
+dems.save <- dems
+dems <- dplyr::select(dems,patient_num,age)
+# dems$gender < ifelse(dems$gender == "F", 1,0)
+
+model.test <- mlearn(dat.train,
+                     dat.test,
+                     dems=dems,
+                     save.model=TRUE,
+                     classifier="gbm",
+                     note="mlho_arrival",
+                     cv="cv",
+                     nfold=5,
+                     aoi="1y_arrival",
+                     multicore=FALSE)
+
+model.test$ROC
+
+##from these loyalty features, we can build a model that has a AUROC of 0.81 on a held out test set
+# if it is smaller than 0.85, not that great
+
+features <- data.frame(model.test$features)
+
+# jgk - compare MLHO features to predetermined features 
+range01 <- function(x){(x-min(x))/(max(x)-min(x))}
+factor.contrib$contrib.scaled <- range01(factor.contrib$contrib)*200
+features.contrib <- factor.contrib %>% inner_join(features,c("phenx"="features"))
+
+
+# jgk - tweaked for including contribution in existing score
+(plot<- ggplot(features.contrib) +
+    geom_segment(
+      aes(y = 0,
+          x = reorder(phenx,Overall),
+          yend = Overall,
+          xend = phenx),
+      size=0.5,alpha=0.5) +
+    geom_point(
+      aes(x=reorder(phenx,Overall),y=Overall),
+      alpha=0.5,size=2,color="red") +
+    geom_point(
+      aes(x=reorder(phenx,Overall),y=contrib.scaled),
+      alpha=0.5,size=2,color="blue") +
+    geom_segment(
+      aes(y = 0,
+          x = reorder(phenx,Overall),
+          yend = contrib.scaled,
+          xend = phenx),
+      size=0.5,alpha=0.5) +
+    theme_minimal()+
+    coord_flip()+
+    labs(y="Feature importance",x=""))
+
+# ROC curve (uses package pROC)
+library(pROC)
+roc_mlho <- model.test$AE %>% roc("actual","Y",ci=TRUE, ci.alpha=0.9, stratified=FALSE,
+            # arguments for plot
+            plot=TRUE, auc.polygon=TRUE, max.auc.polygon=TRUE, grid=TRUE,
+            print.auc=TRUE, show.thres=TRUE)
+youden.score_mlho <- coords(roc_binary, x="best", input="threshold", best.method="youden")
+#roc_binary.ci <- ci.se(roc_binary)
+
+# BUG - plot not saving!
+png(file=paste0(out_dir,"/",currSiteId, "_rocmlho.png"))
+plot.new()
+plot(roc_mlho, print.auc=TRUE, auc.polygon=TRUE,max.auc.polygon=TRUE,type="shape")
+
+
+```
+```{r Save}
+results <- list(
+  model.test = model.test, # MLHO model
+  youden.score = youden.score, # Youden point for ROC of score
+  youden.score_mlho = youden.score_mlho, # Youden point of MLHO ROC
+  features = features, # Importance
+  charlson.compare.summary2, # Charlson comparison plot data
+  features.contrib # Importance in original vs. MLHO
+  
+)
+site_results <- paste0(currSiteId, "_mlhoresults")
+assign(site_results, results)
+save(list = site_results, file = file.path(out_dir, paste0(currSiteId, "_mlhoreturnresults.rda")))
+```
+

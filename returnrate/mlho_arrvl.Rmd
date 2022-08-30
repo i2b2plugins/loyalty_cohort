@@ -70,7 +70,7 @@ Analyze the current loyalty score and its relationship to return and Charlson in
 #jgk - Create decils - note that decile 1 is the lowest rank!
 dems <- dems %>% mutate(decile=ntile(Predicted_score,10))
 # Sanity check score averages by decile
-cor.dat %>% group_by(decile) %>% dplyr::summarize(aver=mean(Predicted_score))
+dems %>% group_by(decile) %>% dplyr::summarize(aver=mean(Predicted_score))
 
 
 # Correlation

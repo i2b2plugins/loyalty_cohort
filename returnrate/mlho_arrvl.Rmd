@@ -9,7 +9,6 @@ CHANGE YOUR DATABASE CONNECTION INFORMATION BELOW!
 CHANGE THE PATH TO LoyaltyCode_PSCoeff.csv BELOW!
 SET OUTPUT DIR AND SITEID BELOW!
  
-Issues: does not save ROC plots correctly. correlation results are output to screen and not file. testing needed. 
 
 ```{r load}
 # make sure the packages are installed --> 
@@ -32,7 +31,7 @@ pacman::p_load(data.table, devtools, backports, Hmisc, tidyr,dplyr,ggplot2,plyr,
 
 # Set an output directory and siteid
 currSiteId <- 'MGB'
-out_dir <- '~'
+out_dir <- './'
 
 # Load the loyalty coefficients file - set to your own path
 coeff <- readr::read_csv("~/workspace/act_loyalty/LoyaltyCode_PSCoeff.csv")
@@ -42,7 +41,7 @@ drv <- JDBC("com.microsoft.sqlserver.jdbc.SQLServerDriver",
             "~/R/sqljdbc4.jar",
             identifier.quote="`")
 conn <- dbConnect(drv,
-                  "jdbc:sqlserver://db.partners.org;databaseName=ACT","user","pass")
+                  "jdbc:sqlserver://db.partners.org;databaseName=ACT","user","password")
 # ** THIS IS FOR ORACLE
 drv <- JDBC(driverClass="oracle.jdbc.OracleDriver", classPath="lib/ojdbc6.jar")
 conn <- dbConnect(jdbcDriver, "jdbc:oracle:thin:@//database.hostname.com:port/service_name_or_sid", "username", "password")
@@ -81,8 +80,10 @@ cor.dat <- cor.dat %>% mutate(label_binary=(label>0))
 cor.dat <- cor.dat %>% mutate(rrate = label/length(uniqpats))
 
 cor.test(cor.dat$Predicted_score,cor.dat$label) # Loyalty score to return count
-cor.test(cor.dat$Predicted_score,as.numeric(cor.dat$label_binary)) # Score to return (binary)
-cor.test(cor.dat$decile,as.numeric(cor.dat$label_binary)) # Decile to return (binary)
+cor.scorereturn <- cor.test(cor.dat$Predicted_score,as.numeric(cor.dat$label_binary)) # Score to return (binary) - for paper
+cor.decilereturn <- cor.test(cor.dat$decile,as.numeric(cor.dat$label_binary)) # Decile to return (binary) - for paper
+cor.scorereturn
+cor.decilereturn
 
 # Print averages of everything - not currently used
 for (i in colnames(cor.dat)) {
@@ -113,11 +114,12 @@ youden.score <- coords(roc_binary, x="best", input="threshold", best.method="you
 #roc_binary.ci <- ci.se(roc_binary)
 #plot(roc_binary.ci,type="bars")
 
-# BUG - saving plot doesn't work...
-png(file=paste0(out_dir,"/",currSiteId, "_rocoriginal.png"))
+png(file=paste0(out_dir,currSiteId, "_rocoriginal.png"))
 plot.new()
 plot(roc_binary,print.auc=TRUE, auc.polygon=TRUE,max.auc.polygon=TRUE,type="shape")
 dev.off()
+
+youden.score
 
 # Test code plots all score vs labels
 #(p1 <- ggplot(cor.dat)+
@@ -127,7 +129,8 @@ dev.off()
 cor.test(cor.dat$Predicted_score,cor.dat$CHARLSON_10YR_SURVIVAL_PROB)
 cor.test(cor.dat$Predicted_score,cor.dat$CHARLSON_INDEX)
 
-cor.test(cor.dat$decile,cor.dat$CHARLSON_INDEX) # This is the one we're reporting in the paper
+cor.decilecharlson <- cor.test(cor.dat$decile,cor.dat$CHARLSON_INDEX) # This is the one we're reporting - for paper
+cor.decilecharlson
 
 # More test code that plots way too many points
 # (p <- ggplot(cor.dat)+
@@ -147,7 +150,6 @@ charlson.compare.summary <- cor.dat %>% group_by(CHARLSON_INDEX) %>% dplyr::summ
 # Similar pattern across all deciles of loyalty score. Highest loyalty contains the sickest but not all high loyalty are sick.
 charlson.compare.summary2 <- cor.dat %>% mutate(decile = ntile(Predicted_score,n=10)) %>% group_by(CHARLSON_INDEX,decile) %>% dplyr::summarize(ct=n())
 ggplot(charlson.compare.summary2,aes(y=decile,x=CHARLSON_INDEX,size=ct)) + geom_point()
-cor.dat
 
 # Alt plot that is not as good
 #ggplot(charlson.compare.summary2,aes(y=ct,x=CHARLSON_INDEX,color=decile)) + geom_line()
@@ -215,7 +217,7 @@ model.test <- mlearn(dat.train,
                      aoi="1y_arrival",
                      multicore=FALSE)
 
-model.test$ROC
+model.test$ROC # reporting AUC for paper
 
 ##from these loyalty features, we can build a model that has a AUROC of 0.81 on a held out test set
 # if it is smaller than 0.85, not that great
@@ -229,7 +231,7 @@ features.contrib <- factor.contrib %>% inner_join(features,c("phenx"="features")
 
 
 # jgk - tweaked for including contribution in existing score
-(plot<- ggplot(features.contrib) +
+(imp.plot<- ggplot(features.contrib) +
     geom_segment(
       aes(y = 0,
           x = reorder(phenx,Overall),
@@ -251,6 +253,7 @@ features.contrib <- factor.contrib %>% inner_join(features,c("phenx"="features")
     theme_minimal()+
     coord_flip()+
     labs(y="Feature importance",x=""))
+ggsave(paste0(out_dir,currSiteId,"_importance.png"),plot=imp.plot)
 
 # ROC curve (uses package pROC)
 library(pROC)
@@ -260,22 +263,38 @@ roc_mlho <- model.test$AE %>% roc("actual","Y",ci=TRUE, ci.alpha=0.9, stratified
             print.auc=TRUE, show.thres=TRUE)
 youden.score_mlho <- coords(roc_binary, x="best", input="threshold", best.method="youden")
 #roc_binary.ci <- ci.se(roc_binary)
+ 
+# Alternative using plotROC...
+# d is observed, m is predicted
+#install.packages("plotROC")
+# library(plotROC)
+# roc.data <- model.test$AE
+#     (g <- ggplot(roc.data, aes(m=Y, d=actual)) + #factor(actual, levels = c(1,0)))) +
+#         geom_roc(n.cuts=.1) + 
+#         coord_equal() +
+#         style_roc() ) 
+#         #annotate("text", x=0.75, y=0.25, label=paste("AUC =", round(ROC$roc, 4))))#round((calc_auc(g))$AUC, 4)
+#     ggsave(filename=paste(dir,"plotROC.png",sep=''))
 
-# BUG - plot not saving!
-png(file=paste0(out_dir,"/",currSiteId, "_rocmlho.png"))
+png(file=paste0(out_dir,currSiteId, "_rocmlho.png"))
 plot.new()
 plot(roc_mlho, print.auc=TRUE, auc.polygon=TRUE,max.auc.polygon=TRUE,type="shape")
-
+dev.off()
 
 ```
 ```{r Save}
 results <- list(
-  model.test = model.test, # MLHO model
+  #model.test = model.test, # MLHO model - this is a ton of data
+  model.roc = model.test$ROC, # MLHO ROC stats
+  original.auc = as.numeric(roc_binary$auc), # Score AUC
   youden.score = youden.score, # Youden point for ROC of score
   youden.score_mlho = youden.score_mlho, # Youden point of MLHO ROC
   features = features, # Importance
-  charlson.compare.summary2, # Charlson comparison plot data
-  features.contrib # Importance in original vs. MLHO
+  charlson.compare.summary2 = charlson.compare.summary2, # Charlson comparison plot data
+  features.contrib = features.contrib,  # Importance in original vs. MLHO
+  cor.decilecharlson = cor.decilecharlson, # Correlations...
+  cor.scorereturn = cor.scorereturn,
+  cor.decilereturn = cor.decilereturn
   
 )
 site_results <- paste0(currSiteId, "_mlhoresults")

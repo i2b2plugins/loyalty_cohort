@@ -219,6 +219,18 @@ model.test <- mlearn(dat.train,
 
 model.test$ROC # reporting AUC for paper
 
+# 9/21/22 -jgk - Run MLHO's secret code path to get regression coeffcients
+model.coeff <- mlearn(dat.train,
+                     NULL,
+                     dems=dems,
+                     save.model=FALSE,
+                     classifier="glm",
+                     note="mlho_arrival",
+                     cv="cv",
+                     nfold=5,
+                     aoi="1y_arrival",
+                     multicore=FALSE)
+
 ##from these loyalty features, we can build a model that has a AUROC of 0.81 on a held out test set
 # if it is smaller than 0.85, not that great
 
@@ -229,31 +241,67 @@ range01 <- function(x){(x-min(x))/(max(x)-min(x))}
 factor.contrib$contrib.scaled <- range01(factor.contrib$contrib)*200
 features.contrib <- factor.contrib %>% inner_join(features,c("phenx"="features"))
 
+# jgk - 9/21/22 - compute coefficients, ORs, and probabilities - something doesn't seem right with the probabilities though so we use OR
+# Thank you for putting up with this messy chunk of code.
+out.importance <- coeff %>% mutate(OR_original=exp(COEFF),FIELD_NAME=tolower(FIELD_NAME)) %>% inner_join(model.coeff %>% mutate(features=tolower(features)),by=c("FIELD_NAME"="features")) %>% mutate(coeff_new=log(OR)) %>% mutate(prob=COEFF/(1+COEFF),prob_new=coeff_new/(1+coeff_new))
+out.importance$OR.new.scaled <- range01(out.importance$OR)*100
+out.importance$OR.original.scaled <- range01(out.importance$OR_original)*100
+feature.frequency <- dbmart %>% group_by(phenx) %>% dplyr::summarise(freq = n()/nrow(dems)) %>% arrange(freq) 
+out.importance <- out.importance %>% mutate(FIELD_NAME=tolower(FIELD_NAME)) %>% inner_join(feature.frequency %>% mutate(phenx=tolower(phenx)),by=c("FIELD_NAME"="phenx"))
+out.importance$ORfreq.new.scaled <- range01(out.importance$OR*out.importance$freq)*100
+out.importance$ORfreq.original.scaled <- range01(out.importance$OR_original*out.importance$freq)*100
 
-# jgk - tweaked for including contribution in existing score
-(imp.plot<- ggplot(features.contrib) +
+
+# jgk - 9/21/22 Scaled odds ratios
+(imp.plot<- ggplot(out.importance) + 
     geom_segment(
       aes(y = 0,
-          x = reorder(phenx,Overall),
-          yend = Overall,
-          xend = phenx),
+          x = reorder(FIELD_NAME,OR.new.scaled),
+          yend = OR.new.scaled,
+          xend = FIELD_NAME),
       size=0.5,alpha=0.5) +
     geom_point(
-      aes(x=reorder(phenx,Overall),y=Overall),
+      aes(x=reorder(FIELD_NAME,OR.new.scaled),y=OR.new.scaled),
       alpha=0.5,size=2,color="red") +
-    geom_point(
-      aes(x=reorder(phenx,Overall),y=contrib.scaled),
-      alpha=0.5,size=2,color="blue") +
     geom_segment(
       aes(y = 0,
-          x = reorder(phenx,Overall),
-          yend = contrib.scaled,
-          xend = phenx),
+          x = reorder(FIELD_NAME,OR.original.scaled),
+          yend = OR.original.scaled,
+          xend = FIELD_NAME),
       size=0.5,alpha=0.5) +
+    geom_point(
+      aes(x=reorder(FIELD_NAME,OR.original.scaled),y=OR.original.scaled),
+      alpha=0.5,size=2,color="blue") +
     theme_minimal()+
     coord_flip()+
-    labs(y="Feature importance",x=""))
-ggsave(paste0(out_dir,currSiteId,"_importance.png"),plot=imp.plot)
+    labs(y="Scaled Odds Ratio",x=""))
+ggsave(paste0(out_dir,currSiteId,"_importanceglm_scaledOR.png"),plot=imp.plot,width=4,height=3,units = "in")
+
+# jgk - 9/21/22 tweaked for including contribution in existing score
+(imp.plot<- ggplot(out.importance) + 
+    geom_segment(
+      aes(y = 0,
+          x = reorder(FIELD_NAME,ORfreq.new.scaled),
+          yend = ORfreq.new.scaled,
+          xend = FIELD_NAME),
+      size=0.5,alpha=0.5) +
+    geom_point(
+      aes(x=reorder(FIELD_NAME,ORfreq.new.scaled),y=ORfreq.new.scaled),
+      alpha=0.5,size=2,color="red") +
+    geom_segment(
+      aes(y = 0,
+          x = reorder(FIELD_NAME,ORfreq.original.scaled),
+          yend = ORfreq.original.scaled,
+          xend = FIELD_NAME),
+      size=0.5,alpha=0.5) +
+    geom_point(
+      aes(x=reorder(FIELD_NAME,ORfreq.original.scaled),y=ORfreq.original.scaled),
+      alpha=0.5,size=2,color="blue") +
+    theme_minimal()+
+    coord_flip()+
+    labs(y="Scaled Frequency* Odds Ratio)",x=""))
+ggsave(paste0(out_dir,currSiteId,"_importanceglm_freqscaledOR.png"),plot=imp.plot,width=4,height=3,units = "in")
+
 
 # ROC curve (uses package pROC)
 library(pROC)
@@ -290,6 +338,7 @@ results <- list(
   youden.score = youden.score, # Youden point for ROC of score
   youden.score_mlho = youden.score_mlho, # Youden point of MLHO ROC
   features = features, # Importance
+  importance = out.importance, # 9-21-22 Importance
   charlson.compare.summary2 = charlson.compare.summary2, # Charlson comparison plot data
   features.contrib = features.contrib,  # Importance in original vs. MLHO
   cor.decilecharlson = cor.decilecharlson, # Correlations...

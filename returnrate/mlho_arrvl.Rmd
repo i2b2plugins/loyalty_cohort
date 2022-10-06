@@ -251,56 +251,81 @@ out.importance <- out.importance %>% mutate(FIELD_NAME=tolower(FIELD_NAME)) %>% 
 out.importance$ORfreq.new.scaled <- range01(out.importance$OR*out.importance$freq)*100
 out.importance$ORfreq.original.scaled <- range01(out.importance$OR_original*out.importance$freq)*100
 
-
-# jgk - 9/21/22 Scaled odds ratios
+# jgk 10/6/22 - Odds ratios on sqrt scale
 (imp.plot<- ggplot(out.importance) + 
     geom_segment(
-      aes(y = 0,
-          x = reorder(FIELD_NAME,OR.new.scaled),
-          yend = OR.new.scaled,
+      aes(y = min(sqrt(OR)),
+          x = reorder(FIELD_NAME,OR),
+          yend = sqrt(OR),
           xend = FIELD_NAME),
       size=0.5,alpha=0.5) +
     geom_point(
-      aes(x=reorder(FIELD_NAME,OR.new.scaled),y=OR.new.scaled),
+      aes(x=reorder(FIELD_NAME,OR),y=sqrt(OR)),
       alpha=0.5,size=2,color="red") +
     geom_segment(
-      aes(y = 0,
-          x = reorder(FIELD_NAME,OR.original.scaled),
-          yend = OR.original.scaled,
+      aes(y = min(sqrt(OR)),
+          x = reorder(FIELD_NAME,OR_original),
+          yend = sqrt(OR_original),
           xend = FIELD_NAME),
       size=0.5,alpha=0.5) +
     geom_point(
-      aes(x=reorder(FIELD_NAME,OR.original.scaled),y=OR.original.scaled),
+      aes(x=reorder(FIELD_NAME,OR_original),y=sqrt(OR_original)),
       alpha=0.5,size=2,color="blue") +
+    geom_hline(yintercept = 1,lty=2) +
     theme_minimal()+
     coord_flip()+
-    labs(y="Scaled Odds Ratio",x=""))
-ggsave(paste0(out_dir,currSiteId,"_importanceglm_scaledOR.png"),plot=imp.plot,width=4,height=3,units = "in")
-
-# jgk - 9/21/22 tweaked for including contribution in existing score
-(imp.plot<- ggplot(out.importance) + 
-    geom_segment(
-      aes(y = 0,
-          x = reorder(FIELD_NAME,ORfreq.new.scaled),
-          yend = ORfreq.new.scaled,
-          xend = FIELD_NAME),
-      size=0.5,alpha=0.5) +
-    geom_point(
-      aes(x=reorder(FIELD_NAME,ORfreq.new.scaled),y=ORfreq.new.scaled),
-      alpha=0.5,size=2,color="red") +
-    geom_segment(
-      aes(y = 0,
-          x = reorder(FIELD_NAME,ORfreq.original.scaled),
-          yend = ORfreq.original.scaled,
-          xend = FIELD_NAME),
-      size=0.5,alpha=0.5) +
-    geom_point(
-      aes(x=reorder(FIELD_NAME,ORfreq.original.scaled),y=ORfreq.original.scaled),
-      alpha=0.5,size=2,color="blue") +
-    theme_minimal()+
-    coord_flip()+
-    labs(y="Scaled Frequency* Odds Ratio)",x=""))
-ggsave(paste0(out_dir,currSiteId,"_importanceglm_freqscaledOR.png"),plot=imp.plot,width=4,height=3,units = "in")
+    labs(y="Square root of Odds Ratio",x=""))
+ggsave(paste0(out_dir,currSiteId,"_importanceglm_OR.png"),plot=imp.plot,width=4,height=3,units = "in")
+# 
+# # jgk - 9/21/22 Scaled odds ratios
+# (imp.plot<- ggplot(out.importance) + 
+#     geom_segment(
+#       aes(y = 0,
+#           x = reorder(FIELD_NAME,OR.new.scaled),
+#           yend = OR.new.scaled,
+#           xend = FIELD_NAME),
+#       size=0.5,alpha=0.5) +
+#     geom_point(
+#       aes(x=reorder(FIELD_NAME,OR.new.scaled),y=OR.new.scaled),
+#       alpha=0.5,size=2,color="red") +
+#     geom_segment(
+#       aes(y = 0,
+#           x = reorder(FIELD_NAME,OR.original.scaled),
+#           yend = OR.original.scaled,
+#           xend = FIELD_NAME),
+#       size=0.5,alpha=0.5) +
+#     geom_point(
+#       aes(x=reorder(FIELD_NAME,OR.original.scaled),y=OR.original.scaled),
+#       alpha=0.5,size=2,color="blue") +
+#     theme_minimal()+
+#     coord_flip()+
+#     labs(y="Scaled Odds Ratio",x=""))
+# ggsave(paste0(out_dir,currSiteId,"_importanceglm_scaledOR.png"),plot=imp.plot,width=4,height=3,units = "in")
+# 
+# # jgk - 9/21/22 tweaked for including contribution in existing score
+# (imp.plot<- ggplot(out.importance) + 
+#     geom_segment(
+#       aes(y = 0,
+#           x = reorder(FIELD_NAME,ORfreq.new.scaled),
+#           yend = ORfreq.new.scaled,
+#           xend = FIELD_NAME),
+#       size=0.5,alpha=0.5) +
+#     geom_point(
+#       aes(x=reorder(FIELD_NAME,ORfreq.new.scaled),y=ORfreq.new.scaled),
+#       alpha=0.5,size=2,color="red") +
+#     geom_segment(
+#       aes(y = 0,
+#           x = reorder(FIELD_NAME,ORfreq.original.scaled),
+#           yend = ORfreq.original.scaled,
+#           xend = FIELD_NAME),
+#       size=0.5,alpha=0.5) +
+#     geom_point(
+#       aes(x=reorder(FIELD_NAME,ORfreq.original.scaled),y=ORfreq.original.scaled),
+#       alpha=0.5,size=2,color="blue") +
+#     theme_minimal()+
+#     coord_flip()+
+#     labs(y="Scaled Frequency* Odds Ratio)",x=""))
+# ggsave(paste0(out_dir,currSiteId,"_importanceglm_freqscaledOR.png"),plot=imp.plot,width=4,height=3,units = "in")
 
 
 # ROC curve (uses package pROC)

@@ -117,6 +117,7 @@ IF OBJECT_ID(N'dbo.loyalty_dev', N'U') IS NULL
 	  [SITE] [varchar](100) NULL,
 	  [cohort_name] [varchar](100) NOT NULL,
 	  [patient_num] [int] NOT NULL,
+    [DEATH_DT] date NULL, /* ADDED OCT2022 */
 	  [index_dt] [date] NULL,
 	  [sex] [varchar](50) NULL,
 	  [age] [int] NULL,
@@ -152,6 +153,7 @@ IF OBJECT_ID(N'dbo.loyalty_charlson_dev', N'U') IS NULL
 	  [SITE] [varchar](100) NULL,
 	  [cohort_name] [varchar](100) NOT NULL,
 	  [PATIENT_NUM] [int] NOT NULL,
+    [DEATH_DT] date NULL, /* ADDED OCT2022 */
 	  [LAST_VISIT] [date] NULL,
     [sex] [varchar](50) NULL,
 	  [age] [int] NULL,
@@ -176,7 +178,6 @@ IF OBJECT_ID(N'dbo.loyalty_charlson_dev', N'U') IS NULL
 	  [METASTATIC] [int] NULL,
 	  [AIDSHIV] [int] NULL
   )
- 
 
 /* ENSURE TEMP IS CLEAR FROM PREVIOUS RUNS */
 IF OBJECT_ID(N'tempdb..#COHORT_FILTER', N'U') IS NOT NULL DROP TABLE #COHORT_FILTER;
@@ -323,6 +324,7 @@ RAISERROR(N'Finish #INCLPAT - Rows: %d - Total Execution (ms): %d - Step Runtime
 CREATE TABLE #COHORT (
 cohort_name VARCHAR(100) NOT NULL,
 patient_num INT NOT NULL,
+death_dt date null,
 sex varchar(50) null,
 age int null,
 Num_Dx1 bit not null DEFAULT 0,
@@ -411,9 +413,10 @@ GROUP BY COHORT_NAME, C.PATIENT_NUM, REPLACE(P.SEX_CD,'DEM|SEX:',''), FLOOR(DATE
 SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
 RAISERROR(N'Cohort and Visit Type variables - Rows: %d - Total Execution (ms): %d - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
 
-DELETE FROM #COHORT WHERE PATIENT_NUM IN (SELECT PATIENT_NUM FROM PATIENT_DIMENSION WHERE DEATH_DATE IS NOT NULL) /* EXCLUDE DECEASED */
-SELECT @ROWS=@@ROWCOUNT
-RAISERROR(N'Dropping patients with a non-null death_date. The script is not currently designed for retrospective studies that included deceased patients. - Rows: %d', 1, 1, @ROWS) with nowait;
+/* OCT2022 -- ALTERATION: NO LONGER FORCEFULLY DROP PATIENTS WITH NON-NULL DEATH DATES - A NEW COLUMN WILL BE ADDED TO THE OUTPUT FOR DEATH_DT AND CAN BE UTILIZED IN THE ANALYSIS AS NECESSARY */
+--DELETE FROM #COHORT WHERE PATIENT_NUM IN (SELECT PATIENT_NUM FROM PATIENT_DIMENSION WHERE DEATH_DATE IS NOT NULL) /* EXCLUDE DECEASED */
+--SELECT @ROWS=@@ROWCOUNT
+--RAISERROR(N'Dropping patients with a non-null death_date. The script is not currently designed for retrospective studies that included deceased patients. - Rows: %d', 1, 1, @ROWS) with nowait;
 
 /* HAVE TO CENSOR BAD BIRTH_DATE DATA FOR AGEGRP STEPS LATER */
 DELETE FROM #COHORT WHERE AGE IS NULL
@@ -546,10 +549,12 @@ GROUP BY cohort_name, PATIENT_NUM, INDEX_DT
 
 TRUNCATE TABLE #COHORT
 
-INSERT INTO #COHORT (cohort_name, PATIENT_NUM, SEX, AGE, [Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], FecalOccultTest, [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3] , Routine_Care_2 , Predicted_Score , LAST_VISIT, INDEX_DT)
-SELECT COHORT_NAME, PATIENT_NUM, SEX, AGE, [Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], FecalOccultTest, [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3]
+INSERT INTO #COHORT (cohort_name, PATIENT_NUM, DEATH_DT, SEX, AGE, [Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], FecalOccultTest, [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3] , Routine_Care_2 , Predicted_Score , LAST_VISIT, INDEX_DT)
+SELECT COHORT_NAME, CF.PATIENT_NUM, P.DEATH_DATE, SEX, AGE, [Num_DX1], [Num_DX2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], FecalOccultTest, [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3]
   , Routine_Care_2, Predicted_Score, LAST_VISIT, INDEX_DT
-FROM #COHORT_FLAGS_PSC
+FROM #COHORT_FLAGS_PSC CF
+  JOIN DBO.PATIENT_DIMENSION P
+    ON CF.patient_num = P.PATIENT_NUM
 
 SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
 RAISERROR(N'Cohort Flags - Rows: %d - Total Execution (ms): %d  - Step Runtime (ms): %d', 1, 1, @ROWS, @ENDRUNTIMEms, @STEPRUNTIMEms) with nowait;
@@ -563,6 +568,7 @@ FROM (
 select @site as [SITE]
 ,cohort_name
 ,patient_num
+,death_dt
 ,index_dt
 ,sex
 ,age
@@ -594,6 +600,7 @@ UNION
 select @site as [SITE]
 ,cohort_name
 ,patient_num
+,death_dt
 ,index_dt
 ,sex
 ,age
@@ -1140,8 +1147,8 @@ WHERE lookbackYears = @lookbackYears
   AND [SITE]=@site
   AND cohort_name IN (SELECT COHORT_NAME FROM #COHORT_FILTER)
 
-INSERT INTO DBO.LOYALTY_DEV ([lookbackYears], [GENDER_DENOMINATORS_YN], [SITE], [cohort_name], [patient_num], [index_dt], [sex], [age], [AGEGRP], [Num_Dx1], [Num_Dx2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], [FecalOccultTest], [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3], [Routine_Care_2], [Predicted_score])
-select @lookbackYears as lookbackYears, IIF(@gendered=0,'N','Y') AS GENDER_DENOMINATORS_YN,  [SITE], [cohort_name], [patient_num], [index_dt], [sex], [age], [AGEGRP], [Num_Dx1], [Num_Dx2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], [FecalOccultTest], [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3], [Routine_Care_2], [Predicted_score]
+INSERT INTO DBO.LOYALTY_DEV ([lookbackYears], [GENDER_DENOMINATORS_YN], [SITE], [cohort_name], [patient_num], [death_dt], [index_dt], [sex], [age], [AGEGRP], [Num_Dx1], [Num_Dx2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], [FecalOccultTest], [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3], [Routine_Care_2], [Predicted_score])
+select @lookbackYears as lookbackYears, IIF(@gendered=0,'N','Y') AS GENDER_DENOMINATORS_YN,  [SITE], [cohort_name], [patient_num], [death_dt], [index_dt], [sex], [age], [AGEGRP], [Num_Dx1], [Num_Dx2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], [FecalOccultTest], [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3], [Routine_Care_2], [Predicted_score]
 from #cohort_agegrp c
 WHERE AGEGRP != 'All Patients'; /* DROP OUT THE ALL PATIENTS DUPLICATES PRESENT IN AGEGRP PARTITIONS */
 
@@ -1153,13 +1160,17 @@ WHERE lookbackYears = @lookbackYears
   AND [SITE]=@site
   AND cohort_name IN (SELECT COHORT_NAME FROM #COHORT_FILTER)
 
-INSERT into DBO.loyalty_charlson_dev ([lookbackYears], [GENDER_DENOMINATORS_YN],  [SITE], [cohort_name], [PATIENT_NUM], [LAST_VISIT], [SEX], [AGE], [AGEGRP], [CHARLSON_INDEX], [CHARLSON_10YR_SURVIVAL_PROB], [MI], [CHF], [CVD], [PVD], [DEMENTIA], [COPD], [RHEUMDIS], [PEPULCER], [MILDLIVDIS], [DIABETES_NOCC], [DIABETES_WTCC], [HEMIPARAPLEG], [RENALDIS], [CANCER], [MSVLIVDIS], [METASTATIC], [AIDSHIV])
-select @lookbackYears as lookbackYears, IIF(@gendered=0,'N','Y'),  [SITE], [cohort_name], [PATIENT_NUM], [LAST_VISIT], [SEX], [AGE], [AGEGRP], [CHARLSON_INDEX], [CHARLSON_10YR_SURVIVAL_PROB], [MI], [CHF], [CVD], [PVD], [DEMENTIA], [COPD], [RHEUMDIS], [PEPULCER], [MILDLIVDIS], [DIABETES_NOCC], [DIABETES_WTCC], [HEMIPARAPLEG], [RENALDIS], [CANCER], [MSVLIVDIS], [METASTATIC], [AIDSHIV] 
-from #COHORT_CHARLSON c
+INSERT into DBO.loyalty_charlson_dev ([lookbackYears], [GENDER_DENOMINATORS_YN],  [SITE], [cohort_name], [PATIENT_NUM], [death_dt], [LAST_VISIT], [SEX], [AGE], [AGEGRP], [CHARLSON_INDEX], [CHARLSON_10YR_SURVIVAL_PROB], [MI], [CHF], [CVD], [PVD], [DEMENTIA], [COPD], [RHEUMDIS], [PEPULCER], [MILDLIVDIS], [DIABETES_NOCC], [DIABETES_WTCC], [HEMIPARAPLEG], [RENALDIS], [CANCER], [MSVLIVDIS], [METASTATIC], [AIDSHIV])
+select DISTINCT @lookbackYears as lookbackYears, IIF(@gendered=0,'N','Y'),  [SITE], CC.[cohort_name], CC.[PATIENT_NUM], C.[death_dt], CC.[LAST_VISIT], CC.[SEX], CC.[AGE], [AGEGRP], [CHARLSON_INDEX], [CHARLSON_10YR_SURVIVAL_PROB], [MI], [CHF], [CVD], [PVD], [DEMENTIA], [COPD], [RHEUMDIS], [PEPULCER], [MILDLIVDIS], [DIABETES_NOCC], [DIABETES_WTCC], [HEMIPARAPLEG], [RENALDIS], [CANCER], [MSVLIVDIS], [METASTATIC], [AIDSHIV] 
+from #COHORT_CHARLSON CC
+  JOIN #COHORT C
+    ON CC.PATIENT_NUM = C.patient_num
 WHERE AGEGRP != 'All Patients'; /* DROP OUT THE ALL PATIENTS DUPLICATES PRESENT IN AGEGRP PARTITIONS */
 
+/* FINAL TIMING MESSAGE */
 SELECT @ROWS=@@ROWCOUNT,@ENDRUNTIMEms = DATEDIFF(MILLISECOND,@STARTTS,GETDATE()),@STEPRUNTIMEms = DATEDIFF(MILLISECOND,@STEPTTS,GETDATE())
 RAISERROR(N'Procedure completed - Total Execution (ms): %d', 1, 1, @ENDRUNTIMEms) with nowait;
+
 /* Adding a blank RAISERROR to pad between runs if using the extract full report sql */
 RAISERROR(N'', 1, 1, @ENDRUNTIMEms) with nowait;
 

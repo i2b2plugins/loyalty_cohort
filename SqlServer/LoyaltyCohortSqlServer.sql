@@ -370,7 +370,11 @@ FROM #INCLPAT P
   JOIN VISIT_DIMENSION V 
     ON P.PATIENT_NUM = V.PATIENT_NUM
     AND CONVERT(DATE,V.START_DATE) BETWEEN DATEADD(YY,-@lookbackYears,CF.INDEX_DT) AND CF.INDEX_DT
-    AND V.INOUT_CD IN ('I','O')
+    AND V.INOUT_CD IN (SELECT CD.CONCEPT_CD 
+                        FROM CONCEPT_DIMENSION CD
+                          JOIN [dbo].[xref_LoyaltyCode_paths] LCP
+                            ON CD.CONCEPT_PATH LIKE CONCAT(LCP.ACT_PATH,'%')
+                            AND LCP.Feature_name = 'INP1_OPT1_Visit')
 GROUP BY CF.COHORT_NAME, P.PATIENT_NUM, CF.INDEX_DT
 UNION ALL
 /* AT LEAST 2 OUTPATIENT VISITS DURING THE MEASURED LOOKBACK PERIOD */
@@ -381,7 +385,11 @@ FROM #INCLPAT P
   JOIN VISIT_DIMENSION V 
     ON P.PATIENT_NUM = V.PATIENT_NUM
     AND CONVERT(DATE,V.START_DATE) BETWEEN DATEADD(YY,-@lookbackYears,CF.INDEX_DT) AND CF.INDEX_DT
-    AND V.INOUT_CD IN ('X','O')
+    AND V.INOUT_CD IN (SELECT CD.CONCEPT_CD 
+                        FROM CONCEPT_DIMENSION CD
+                          JOIN [dbo].[xref_LoyaltyCode_paths] LCP
+                            ON CD.CONCEPT_PATH LIKE CONCAT(LCP.ACT_PATH,'%')
+                            AND LCP.Feature_name = 'OPT2_Visit')
 GROUP BY CF.COHORT_NAME, P.PATIENT_NUM, CF.INDEX_DT
 HAVING COUNT(*) >= 2
 UNION ALL
@@ -393,7 +401,11 @@ FROM #INCLPAT P
   JOIN VISIT_DIMENSION V 
     ON P.PATIENT_NUM = V.PATIENT_NUM
     AND CONVERT(DATE,V.START_DATE) BETWEEN DATEADD(YY,-@lookbackYears,CF.INDEX_DT) AND CF.INDEX_DT
-    AND V.INOUT_CD IN ('E','EI')
+    AND V.INOUT_CD IN (SELECT CD.CONCEPT_CD 
+                        FROM CONCEPT_DIMENSION CD
+                          JOIN [dbo].[xref_LoyaltyCode_paths] LCP
+                            ON CD.CONCEPT_PATH LIKE CONCAT(LCP.ACT_PATH,'%')
+                            AND LCP.Feature_name = 'ED_visit')
 GROUP BY CF.COHORT_NAME, P.PATIENT_NUM, CF.INDEX_DT
 UNION ALL
 /* LAST VISIT */

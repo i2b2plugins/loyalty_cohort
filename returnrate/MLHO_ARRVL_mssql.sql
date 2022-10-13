@@ -3,7 +3,7 @@
  
  To use:
    * Set site id in EXEC line below.
-   * Remove or modify the code marked "-- JGK filter out false visits" to filter out visit_dimension entries that are not real visits
+   * Add or modify the code marked "-- Note: You can add site-specific checks" to filter out visit_dimension entries that are not real visits
    * Sections beginning with a comment labeled "output" are optional statistics and are for checking or cross-site sharing.
    * Run the script and verify the views were created
  */
@@ -31,13 +31,13 @@ select patient_num, cohort, index_dt from #precohort where index_dt!=ephemeral_d
 
 EXEC [dbo].[usp_LoyaltyCohort_opt] @site='XXX', @lookbackYears=5,  @demographic_facts=1, @gendered=1, @cohort_filter=@cfilter, @output=0
 --EXEC [dbo].[usp_LoyaltyCohort_opt] @site='UKY', @lookbackYears=2, @demographic_facts=1, @gendered=2, @cohort_filter=@cfilter, @output=0
---EXEC [dbo].[usp_LoyaltyCohort_opt] @site='MGB', @lookbackYears=1, @demographic_facts=0, @gendered=1, @cohort_filter=@cfilter, @output=1
+--EXEC [dbo].[usp_LoyaltyCohort_opt] @site='MGB', @lookbackYears=5, @demographic_facts=0, @gendered=1, @cohort_filter=@cfilter, @output=1
 
-/* share percentage data */
+/* OUTPUT: share percentage data */
 /* this query is the output that should be shared across sites */
 /* do not share patient level data from the Summary_Description = 'Patient Counts' records */
 --/* these are for your internal use only */
-SELECT DISTINCT LDS.COHORT_NAME, LDS.[SITE], LDS.[EXTRACT_DTTM], LDS.[LOOKBACK_YR], LDS.GENDER_DENOMINATORS_YN, LDS.[CUTOFF_FILTER_YN], LDS.[Summary_Description], LDS.[tablename], LDS.[Num_DX1], LDS.[Num_DX2], LDS.[MedUse1], LDS.[MedUse2]
+/*SELECT DISTINCT LDS.COHORT_NAME, LDS.[SITE], LDS.[EXTRACT_DTTM], LDS.[LOOKBACK_YR], LDS.GENDER_DENOMINATORS_YN, LDS.[CUTOFF_FILTER_YN], LDS.[Summary_Description], LDS.[tablename], LDS.[Num_DX1], LDS.[Num_DX2], LDS.[MedUse1], LDS.[MedUse2]
 , LDS.[Mammography], LDS.[PapTest], LDS.[PSATest], LDS.[Colonoscopy], LDS.[FecalOccultTest], LDS.[FluShot], LDS.[PneumococcalVaccine], LDS.[BMI], LDS.[A1C], LDS.[MedicalExam], LDS.[INP1_OPT1_Visit], LDS.[OPT2_Visit], LDS.[ED_Visit]
 , LDS.[MDVisit_pname2], LDS.[MDVisit_pname3], LDS.[Routine_care_2], LDS.[Subjects_NoCriteria], LDS.[PredictiveScoreCutoff]
 , LDS.[MEAN_10YRPROB], LDS.[MEDIAN_10YR_SURVIVAL], LDS.[MODE_10YRPROB], LDS.[STDEV_10YRPROB]
@@ -49,8 +49,7 @@ SELECT DISTINCT LDS.COHORT_NAME, LDS.[SITE], LDS.[EXTRACT_DTTM], LDS.[LOOKBACK_Y
 FROM [dbo].[loyalty_dev_summary] LDS
 WHERE LDS.Summary_Description = 'PercentOfSubjects'
   AND COHORT_NAME = 'MLHO_ARRVL'
-ORDER BY LDS.COHORT_NAME, LDS.LOOKBACK_YR, LDS.GENDER_DENOMINATORS_YN, LDS.CUTOFF_FILTER_YN, LDS.TABLENAME;
-
+ORDER BY LDS.COHORT_NAME, LDS.LOOKBACK_YR, LDS.GENDER_DENOMINATORS_YN, LDS.CUTOFF_FILTER_YN, LDS.TABLENAME;*/
 
 /* PULLING THE RETURN VISIT DATA POINTS FOR 6MO AND 1YR */
 
@@ -66,7 +65,8 @@ FROM DBO.LOYALTY_DEV LD
     AND LD.cohort_name = LCD.cohort_name
     AND LD.lookbackYears = LCD.lookbackYears
     AND LD.GENDER_DENOMINATORS_YN = LCD.GENDER_DENOMINATORS_YN
-WHERE LD.COHORT_NAME = 'MLHO_ARRVL'
+    AND isnull(LD.DEATH_DT,'88990101')>index_dt --- remove patients that died before end of measure period
+WHERE LD.COHORT_NAME = 'MLHO_ARRVL' 
 )
 , CTE_1Y AS (
 SELECT V.PATIENT_NUM
@@ -77,9 +77,10 @@ FROM COHORT C
   JOIN DBO.VISIT_DIMENSION V
     ON C.patient_num = V.PATIENT_NUM
     AND V.START_DATE BETWEEN DATEADD(DD,1,C.index_dt) AND DATEADD(YY,1,C.INDEX_DT)
-    -- JGK filter out false visits
-	and start_date!=end_date -- filter out instantaneous visits, which are usually lab results (jgk)
-	and sourcesystem_cd not like '%PB' -- jgk Professional billing, which is listed as a visit. This works because such stays have only one sourcesystem, from victor's analysis.
+-- Note: You can add site-specific checks here to ensure the visit is a real encounter
+-- These filters are MGB specific
+--	and start_date!=end_date -- filter out instantaneous visits, which are usually lab results (jgk)
+--	and sourcesystem_cd not like '%PB' -- jgk Professional billing, which is listed as a visit. This works because such stays have only one sourcesystem, from victor's analysis.
 GROUP BY V.PATIENT_NUM, C.INDEX_DT
 )
 , CTE_6MO AS (
@@ -106,7 +107,7 @@ FROM COHORT C
 GO
 
 /* OUTPUT SOME FREQUENCIES TO CHECK THE ABOVE RESULTS */
-SELECT DECILE, DENOMINATOR, N_6MO, N_1Y
+/*SELECT DECILE, DENOMINATOR, N_6MO, N_1Y
   , 1.0*N_6MO/DENOMINATOR AS RATE_6MO
   , 1.0*N_1Y/DENOMINATOR AS RATE_1Y
 FROM (
@@ -121,15 +122,16 @@ FROM DBO.LOYALTY_MLHO_ARRVL
 )D
 GROUP BY DECILE
 )S
-ORDER BY 1 ASC
+ORDER BY 1 ASC*/
 
 /* OUTPUT min/max score by  decile */
-select min(predicted_score),max(predicted_score),decile from
+/*select min(predicted_score),max(predicted_score),decile from
 (SELECT PATIENT_NUM, Predicted_score
   , NTILE(10) OVER (ORDER BY PREDICTED_SCORE DESC) AS DECILE
   , FIRST_VISIT_6MO, FIRST_VISIT_1Y
 FROM DBO.LOYALTY_MLHO_ARRVL) x
 group by decile
+*/
 
 --SELECT QUINTILE, DENOMINATOR, N_6MO, N_1Y
 --  , 1.0*N_6MO/DENOMINATOR AS RATE_6MO
@@ -208,4 +210,4 @@ GO
 
 
 
-
+s

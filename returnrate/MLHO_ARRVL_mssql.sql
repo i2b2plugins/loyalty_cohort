@@ -65,7 +65,7 @@ FROM DBO.LOYALTY_DEV LD
     AND LD.cohort_name = LCD.cohort_name
     AND LD.lookbackYears = LCD.lookbackYears
     AND LD.GENDER_DENOMINATORS_YN = LCD.GENDER_DENOMINATORS_YN
-    AND isnull(LD.DEATH_DT,'88990101')>index_dt --- remove patients that died before end of measure period
+    AND isnull(LD.DEATH_DT,'20990101')>dateadd(year, 1, index_dt) --- remove pts that died before end of measure period plus one year
 WHERE LD.COHORT_NAME = 'MLHO_ARRVL' 
 )
 , CTE_1Y AS (

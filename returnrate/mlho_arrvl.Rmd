@@ -149,7 +149,10 @@ charlson.compare.summary <- cor.dat %>% group_by(CHARLSON_INDEX) %>% dplyr::summ
 # Decile of score vs charlson index, sized by group size - this goes in the paper
 # Similar pattern across all deciles of loyalty score. Highest loyalty contains the sickest but not all high loyalty are sick.
 charlson.compare.summary2 <- cor.dat %>% mutate(decile = ntile(Predicted_score,n=10)) %>% group_by(CHARLSON_INDEX,decile) %>% dplyr::summarize(ct=n())
-ggplot(charlson.compare.summary2,aes(y=decile,x=CHARLSON_INDEX,size=ct)) + geom_point()
+# Log scale dot size looks good, or /1000.
+ggplot(charlson.compare.summary2,aes(y=decile,x=CHARLSON_INDEX,size=log(ct))) + geom_point()
+# 10-19-22 Let's save this one too
+ggsave(paste0(out_dir,currSiteId,"_charlsoncompare.png"),plot=imp.plot,width=4,height=3,units = "in")
 
 # Alt plot that is not as good
 #ggplot(charlson.compare.summary2,aes(y=ct,x=CHARLSON_INDEX,color=decile)) + geom_line()

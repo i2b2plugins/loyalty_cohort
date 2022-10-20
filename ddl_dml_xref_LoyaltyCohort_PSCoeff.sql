@@ -1,30 +1,30 @@
 /* DDL + DML for xref_LoyaltyCode_PSCoeff -- DWHenderson -- darren.henderson@uky.edu */
 
-IF OBJECT_ID(N'xref_LoyaltyCode_PSCoeff', N'U') IS NOT NULL DROP TABLE xref_LoyaltyCode_PSCoeff;
+IF OBJECT_ID(N'XREF_LOYALTYCODE_PSCOEFF', N'U') IS NOT NULL DROP TABLE xref_LoyaltyCode_PSCoeff;
 
-CREATE TABLE xref_LoyaltyCode_PSCoeff (
+CREATE TABLE XREF_LOYALTYCODE_PSCOEFF (
   FIELD_NAME VARCHAR(50),
   COEFF NUMERIC(4,3)
 );
 
-INSERT INTO xref_LoyaltyCode_PSCoeff (FIELD_NAME, COEFF)
-VALUES ('MDVisit_pname2',0.049)
-,('MDVisit_pname3',0.087)
-,('MedicalExam',0.078)
-,('Mammography',0.075)
-,('PapTest',0.009)
-,('PSATest',0.103)
-,('Colonoscopy',0.064)
-,('FecalOccultTest',0.034)
-,('FluShot',0.102)
-,('PneumococcalVaccine',0.031)
+INSERT INTO XREF_LOYALTYCODE_PSCOEFF (FIELD_NAME, COEFF)
+VALUES ('MDVISIT_PNAME2',0.049)
+,('MDVISIT_PNAME3',0.087)
+,('MEDICAL_EXAM',0.078)
+,('MAMMOGRAPHY',0.075)
+,('PAP_TEST',0.009)
+,('PSA_TEST',0.103)
+,('COLONOSCOPY',0.064)
+,('FECAL_OCCULT_TEST',0.034)
+,('FLU_SHOT',0.102)
+,('PNEUMOCOCCAL_VACCINE',0.031)
 ,('BMI',0.017)
 ,('A1C',0.018)
-,('meduse1',0.002)
-,('meduse2',0.074)
-,('INP1_OPT1_Visit',0.091)
-,('OPT2_Visit',0.050)
-,('Num_Dx1',-0.026)
+,('MED_USE1',0.002)
+,('MED_USE2',0.074)
+,('INP1_OPT1_VISIT',0.091)
+,('OPT2_VISIT',0.050)
+,('NUM_DX1',-0.026)
 ,('NUM_DX2',0.037)
-,('ED_Visit',0.078)
-,('Routine_Care_2',0.049);
+,('ED_VISIT',0.078)
+,('ROUTINE_CARE_2',0.049);

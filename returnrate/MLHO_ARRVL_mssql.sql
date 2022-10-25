@@ -56,17 +56,18 @@ ORDER BY LDS.COHORT_NAME, LDS.LOOKBACK_YR, LDS.GENDER_DENOMINATORS_YN, LDS.CUTOF
 DROP TABLE DBO.LOYALTY_MLHO_ARRVL
 GO
 
+
 ;WITH COHORT AS (
 SELECT LD.*
-  , [CHARLSON_INDEX], [CHARLSON_10YR_SURVIVAL_PROB], [MI], [CHF], [CVD], [PVD], [DEMENTIA], [COPD], [RHEUMDIS], [PEPULCER], [MILDLIVDIS], [DIABETES_NOCC], [DIABETES_WTCC], [HEMIPARAPLEG], [RENALDIS], [CANCER], [MSVLIVDIS], [METASTATIC], [AIDSHIV]
+  , [CHARLSON_INDEX], [CHARLSON_10YR_PROB], [MI], [CHF], [CVD], [PVD], [DEMENTIA], [COPD], [RHEUMDIS], [PEPULCER], [MILDLIVDIS], [DIABETES_NOCC], [DIABETES_WTCC], [HEMIPARAPLEG], [RENALDIS], [CANCER], [MSVLIVDIS], [METASTATIC], [AIDSHIV]
 FROM DBO.LOYALTY_DEV LD
-  JOIN DBO.loyalty_charlson_dev LCD
-    ON LD.patient_num = LCD.PATIENT_NUM
-    AND LD.cohort_name = LCD.cohort_name
-    AND LD.lookbackYears = LCD.lookbackYears
+  JOIN DBO.LOYALTY_CHARLSON_DEV LCD
+    ON LD.PATIENT_NUM = LCD.PATIENT_NUM
+    AND LD.COHORT_NAME = LCD.COHORT_NAME
+    AND LD.LOOKBACK_YEARS = LCD.LOOKBACK_YEARS
     AND LD.GENDER_DENOMINATORS_YN = LCD.GENDER_DENOMINATORS_YN
-    AND isnull(LD.DEATH_DT,'20990101')>dateadd(year, 1, index_dt) --- remove pts that died before end of measure period plus one year
-WHERE LD.COHORT_NAME = 'MLHO_ARRVL' 
+    AND isnull(LD.DEATH_DT,'20990101')>dateadd(year, 1, INDEX_DT) --- remove pts that died before end of measure period plus one year
+WHERE LD.COHORT_NAME = 'MLHO_ARRVL'
 )
 , CTE_1Y AS (
 SELECT V.PATIENT_NUM
@@ -77,33 +78,33 @@ FROM COHORT C
   JOIN DBO.VISIT_DIMENSION V
     ON C.patient_num = V.PATIENT_NUM
     AND V.START_DATE BETWEEN DATEADD(DD,1,C.index_dt) AND DATEADD(YY,1,C.INDEX_DT)
--- Note: You can add site-specific checks here to ensure the visit is a real encounter
--- These filters are MGB specific
---	and start_date!=end_date -- filter out instantaneous visits, which are usually lab results (jgk)
---	and sourcesystem_cd not like '%PB' -- jgk Professional billing, which is listed as a visit. This works because such stays have only one sourcesystem, from victor's analysis.
+    -- JGK filter out false visits
+	and start_date!=end_date -- filter out instantaneous visits, which are usually lab results (jgk)
+	and sourcesystem_cd not like '%PB' -- jgk Professional billing, which is listed as a visit. This works because such stays have only one sourcesystem, from victor's analysis.
 GROUP BY V.PATIENT_NUM, C.INDEX_DT
 )
 , CTE_6MO AS (
 SELECT V.PATIENT_NUM
   , MIN(V.START_DATE) AS FIRST_VISIT_6MO
-  , DATEDIFF(DD,C.index_dt,MIN(V.START_DATE)) AS DELTA_FIRST_VISIT_6MO
+  , DATEDIFF(DD,C.INDEX_DT,MIN(V.START_DATE)) AS DELTA_FIRST_VISIT_6MO
   , COUNT(DISTINCT V.ENCOUNTER_NUM) AS CNTD_VISITS_6MO
 FROM COHORT C
   JOIN DBO.VISIT_DIMENSION V
-    ON C.patient_num = V.PATIENT_NUM
-    AND V.START_DATE BETWEEN DATEADD(DD,1,C.index_dt) AND DATEADD(MM,6,C.INDEX_DT)
-    -- JGK filter out false visits
-	and start_date!=end_date -- filter out instantaneous visits, which are usually lab results (jgk)
-	and sourcesystem_cd not like '%PB' -- jgk Professional billing, which is listed as a visit. This works because such stays have only one sourcesystem, from victor's analysis.
+    ON C.PATIENT_NUM = V.PATIENT_NUM
+    AND V.START_DATE BETWEEN DATEADD(DD,1,C.INDEX_DT) AND DATEADD(MM,6,C.INDEX_DT)
+	-- Note: You can add site-specific checks here to ensure the visit is a real encounter
+	-- These filters are MGB specific
+	--	and start_date!=end_date -- filter out instantaneous visits, which are usually lab results (jgk)
+	--	and sourcesystem_cd not like '%PB' -- jgk Professional billing, which is listed as a visit. This works because such stays have only one sourcesystem, from victor's analysis.
 GROUP BY V.PATIENT_NUM, C.INDEX_DT
 )
 SELECT C.*, C6.FIRST_VISIT_6MO, C6.DELTA_FIRST_VISIT_6MO, C6.CNTD_VISITS_6MO, C1.FIRST_VISIT_1Y, C1.DELTA_FIRST_VISIT_1Y, C1.CNTD_VISITS_1Y
 INTO DBO.LOYALTY_MLHO_ARRVL
 FROM COHORT C
   LEFT JOIN CTE_6MO C6
-    ON C.patient_num = C6.PATIENT_NUM
+    ON C.PATIENT_NUM = C6.PATIENT_NUM
   LEFT JOIN CTE_1Y C1
-    ON C.patient_num = C1.PATIENT_NUM
+    ON C.PATIENT_NUM = C1.PATIENT_NUM
 GO
 
 /* OUTPUT SOME FREQUENCIES TO CHECK THE ABOVE RESULTS */
@@ -155,52 +156,51 @@ group by decile
 --where object_id = object_id(N'DBO.LOYALTY_MLHO_ARRVL')
 --ORDER BY column_id
 --GO
-
 -- ** THIS IS THE MAIN SECTION THAT BUILDS VIEWS FOR THE R ANALYSIS! **
-CREATE OR ALTER VIEW LOYALTY_MLHO_labeldt_vw AS --dbmart
-SELECT patient_num, INDEX_DT AS start_dt, FEAT AS phenx
+ 
+CREATE OR ALTER VIEW LOYALTY_MLHO_LABELDT_VW AS --dbmart
+SELECT PATIENT_NUM, INDEX_DT AS START_DT, FEAT AS PHENX
 FROM (
 SELECT PATIENT_NUM
 , INDEX_DT
-, CONVERT(NVARCHAR(50),NULLIF([Num_Dx1],0)) AS Num_Dx1 
-, CONVERT(NVARCHAR(50),NULLIF([Num_Dx2],0)) AS Num_Dx2 
-, CONVERT(NVARCHAR(50),NULLIF([MedUse1],0)) AS MedUse1 
-, CONVERT(NVARCHAR(50),NULLIF([MedUse2],0)) AS MedUse2 
-, CONVERT(NVARCHAR(50),NULLIF([Mammography],0)) AS Mammography 
-, CONVERT(NVARCHAR(50),NULLIF([PapTest],0)) AS PapTest 
-, CONVERT(NVARCHAR(50),NULLIF([PSATest],0)) AS PSATest 
-, CONVERT(NVARCHAR(50),NULLIF([Colonoscopy],0)) AS Colonoscopy 
-, CONVERT(NVARCHAR(50),NULLIF([FecalOccultTest],0)) AS FecalOccultTest 
-, CONVERT(NVARCHAR(50),NULLIF([FluShot],0)) AS FluShot 
-, CONVERT(NVARCHAR(50),NULLIF([PneumococcalVaccine],0)) AS PneumococcalVaccine 
+, CONVERT(NVARCHAR(50),NULLIF([NUM_DX1],0)) AS NUM_DX1
+, CONVERT(NVARCHAR(50),NULLIF([NUM_DX2],0)) AS NUM_DX2
+, CONVERT(NVARCHAR(50),NULLIF([MED_USE1],0)) AS MED_USE1
+, CONVERT(NVARCHAR(50),NULLIF([MED_USE2],0)) AS MED_USE2
+, CONVERT(NVARCHAR(50),NULLIF([MAMMOGRAPHY],0)) AS MAMMOGRAPHY
+, CONVERT(NVARCHAR(50),NULLIF([PAP_TEST],0)) AS PAP_TEST
+, CONVERT(NVARCHAR(50),NULLIF([PSA_TEST],0)) AS PSA_TEST
+, CONVERT(NVARCHAR(50),NULLIF([COLONOSCOPY],0)) AS COLONOSCOPY
+, CONVERT(NVARCHAR(50),NULLIF([FECAL_OCCULT_TEST],0)) AS FECAL_OCCULT_TEST
+, CONVERT(NVARCHAR(50),NULLIF([FLU_SHOT],0)) AS FLU_SHOT
+, CONVERT(NVARCHAR(50),NULLIF([PNEUMOCOCCAL_VACCINE],0)) AS PNEUMOCOCCAL_VACCINE
 , CONVERT(NVARCHAR(50),NULLIF([BMI],0)) AS BMI 
 , CONVERT(NVARCHAR(50),NULLIF([A1C],0)) AS A1C 
-, CONVERT(NVARCHAR(50),NULLIF([MedicalExam],0)) AS MedicalExam 
-, CONVERT(NVARCHAR(50),NULLIF([INP1_OPT1_Visit],0)) AS INP1_OPT1_Visit 
-, CONVERT(NVARCHAR(50),NULLIF([OPT2_Visit],0)) AS OPT2_Visit 
-, CONVERT(NVARCHAR(50),NULLIF([ED_Visit],0)) AS ED_Visit 
-, CONVERT(NVARCHAR(50),NULLIF([MDVisit_pname2],0)) AS MDVisit_pname2 
-, CONVERT(NVARCHAR(50),NULLIF([MDVisit_pname3],0)) AS MDVisit_pname3 
-, CONVERT(NVARCHAR(50),NULLIF([Routine_Care_2],0)) AS Routine_Care_2 
+, CONVERT(NVARCHAR(50),NULLIF([MEDICAL_EXAM],0)) AS MEDICAL_EXAM
+, CONVERT(NVARCHAR(50),NULLIF([INP1_OPT1_VISIT],0)) AS INP1_OPT1_VISIT
+, CONVERT(NVARCHAR(50),NULLIF([OPT2_VISIT],0)) AS OPT2_VISIT
+, CONVERT(NVARCHAR(50),NULLIF([ED_VISIT],0)) AS ED_VISIT
+, CONVERT(NVARCHAR(50),NULLIF([MDVISIT_PNAME2],0)) AS MDVISIT_PNAME2
+, CONVERT(NVARCHAR(50),NULLIF([MDVISIT_PNAME3],0)) AS MDVISIT_PNAME3
+, CONVERT(NVARCHAR(50),NULLIF([ROUTINE_CARE_2],0)) AS ROUTINE_CARE2
 FROM DBO.LOYALTY_MLHO_ARRVL
 )O
 UNPIVOT
-(VALUE FOR FEAT IN ([Num_Dx1], [Num_Dx2], [MedUse1], [MedUse2], [Mammography], [PapTest], [PSATest], [Colonoscopy], [FecalOccultTest], [FluShot], [PneumococcalVaccine], [BMI], [A1C], [MedicalExam], [INP1_OPT1_Visit], [OPT2_Visit], [ED_Visit], [MDVisit_pname2], [MDVisit_pname3], [Routine_Care_2]))U
+(VALUE FOR FEAT IN ([NUM_DX1], [NUM_DX2], [MED_USE1], [MED_USE2], [MAMMOGRAPHY], [PAP_TEST], [PSA_TEST], [COLONOSCOPY], [FECAL_OCCULT_TEST], [FLU_SHOT], [PNEUMOCOCCAL_VACCINE], [BMI], [A1C], [MEDICAL_EXAM], [INP1_OPT1_VISIT], [OPT2_VISIT], [ED_VISIT], [MDVISIT_PNAME2], [MDVISIT_PNAME3], [ROUTINE_CARE2]))U
 GO
-
-CREATE OR ALTER VIEW LOYALTY_MLHO_dbmart6MO_vw AS -- labeldt6mo
-SELECT patient_num, isnull(CNTD_VISITS_6MO,0) AS label
+CREATE OR ALTER VIEW LOYALTY_MLHO_DBMART6MO_VW AS -- labeldt6mo
+SELECT PATIENT_NUM, isnull(CNTD_VISITS_6MO,0) AS LABEL
 FROM DBO.LOYALTY_MLHO_ARRVL
 GO
 
-CREATE OR ALTER VIEW LOYALTY_MLHO_dbmart1Y_vw AS -- labeldt1y
-SELECT patient_num, isnull(CNTD_VISITS_1Y,0) AS label
+CREATE OR ALTER VIEW LOYALTY_MLHO_DBMART1Y_VW AS -- labeldt1y
+SELECT PATIENT_NUM, isnull(CNTD_VISITS_1Y,0) AS LABEL
 FROM DBO.LOYALTY_MLHO_ARRVL
 GO
 
-CREATE OR ALTER VIEW LOYALTY_MLHO_demographic_vw AS
-SELECT patient_num, age, sex as gender, [lookbackYears], [SITE], [cohort_name], [index_dt], [AGEGRP]
-  , [Predicted_score], [CHARLSON_INDEX], [CHARLSON_10YR_SURVIVAL_PROB], [MI], [CHF], [CVD], [PVD], [DEMENTIA], [COPD], [RHEUMDIS]
+CREATE OR ALTER VIEW LOYALTY_MLHO_DEMOGRAPHIC_VW AS
+SELECT patient_num, age, sex as gender, [LOOKBACK_YEARS], [SITE], [cohort_name], [index_dt], [AGE_GRP]
+  , [Predicted_score], [CHARLSON_INDEX], [CHARLSON_10YR_PROB], [MI], [CHF], [CVD], [PVD], [DEMENTIA], [COPD], [RHEUMDIS]
   , [PEPULCER], [MILDLIVDIS], [DIABETES_NOCC], [DIABETES_WTCC], [HEMIPARAPLEG], [RENALDIS], [CANCER], [MSVLIVDIS], [METASTATIC], [AIDSHIV]
   , [FIRST_VISIT_6MO], [DELTA_FIRST_VISIT_6MO], [CNTD_VISITS_6MO], [FIRST_VISIT_1Y], [DELTA_FIRST_VISIT_1Y], [CNTD_VISITS_1Y]
 FROM DBO.LOYALTY_MLHO_ARRVL

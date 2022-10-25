@@ -5,10 +5,10 @@ output: html_notebook
 
 This should be run for loyalty cohort analysis after running the loyalty score script AND the return rate script. This connects to your database and loads data via the views at the end of the return rate script.
 
-CHANGE YOUR DATABASE CONNECTION INFORMATION BELOW!
-CHANGE THE PATH TO LoyaltyCode_PSCoeff.csv BELOW!
-SET OUTPUT DIR AND SITEID BELOW!
- 
+1) CHANGE YOUR DATABASE CONNECTION INFORMATION BELOW!
+2) CHANGE THE PATH TO LoyaltyCode_PSCoeff.csv BELOW!
+3) SET OUTPUT DIR AND SITEID BELOW!
+4) Create a results directory as a child of the working directory, so MLHO can save results.
 
 ```{r load}
 # make sure the packages are installed --> 
@@ -167,7 +167,7 @@ MLHO modeling below:
 # Set up train/test data
 
 labeldt <- subset(labeldt,labeldt$patient_num %in% dems$patient_num)
-labeldt$label <- ifelse(labeldt$label >1,1,0)
+labeldt$label <- ifelse(labeldt$label >=1,1,0)
 #table(labeldt$label)
 
 uniqpats <- c(as.character(unique(dbmart$patient_num)))

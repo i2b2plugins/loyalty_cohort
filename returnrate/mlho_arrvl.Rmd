@@ -34,7 +34,8 @@ currSiteId <- 'MGB'
 out_dir <- './'
 
 # Load the loyalty coefficients file - set to your own path
-coeff <- readr::read_csv("~/workspace/act_loyalty/LoyaltyCode_PSCoeff.csv")
+# LOAD FROM DB
+#coeff <- readr::read_csv("~/workspace/act_loyalty/LoyaltyCode_PSCoeff.csv")
 
 # db connection for MSSQL - modify as needed
 drv <- JDBC("com.microsoft.sqlserver.jdbc.SQLServerDriver",
@@ -60,6 +61,13 @@ conn <- dbConnect(jdbcDriver, "jdbc:oracle:thin:@//database.hostname.com:port/se
 labeldt <- dbGetQuery(conn,paste0("select * from [dbo].[LOYALTY_MLHO_dbmart1Y_vw]"))
 dems <- dbGetQuery(conn,paste0("select * from [dbo].[LOYALTY_MLHO_demographic_vw]"))
 dbmart <- dbGetQuery(conn,paste0("select * from [dbo].[LOYALTY_MLHO_labeldt_vw]"))
+coeff <- dbGetQuery(conn,paste0("select * from [dbo].[XREF_LOYALTYCODE_PSCOEFF]"))
+
+# Switch column headers to lowercase
+names(dems) <- tolower(names(dems))
+names(dbmart) <- tolower(names(dbmart))
+names(labeldt) <- tolower(names(labeldt))
+names(coeff) <- tolower(names(coeff))
 
 ```
 
@@ -68,9 +76,9 @@ Analyze the current loyalty score and its relationship to return and Charlson in
 ```{r}
 
 #jgk - Create decils - note that decile 1 is the lowest rank!
-dems <- dems %>% mutate(decile=ntile(Predicted_score,10))
+dems <- dems %>% mutate(decile=ntile(predicted_score,10))
 # Sanity check score averages by decile
-dems %>% group_by(decile) %>% dplyr::summarize(aver=mean(Predicted_score))
+dems %>% group_by(decile) %>% dplyr::summarize(aver=mean(predicted_score))
 
 
 # Correlation
@@ -79,8 +87,8 @@ uniqpats <- c(as.character(unique(dbmart$patient_num)))
 cor.dat <- cor.dat %>% mutate(label_binary=(label>0))
 cor.dat <- cor.dat %>% mutate(rrate = label/length(uniqpats))
 
-cor.test(cor.dat$Predicted_score,cor.dat$label) # Loyalty score to return count
-cor.scorereturn <- cor.test(cor.dat$Predicted_score,as.numeric(cor.dat$label_binary)) # Score to return (binary) - for paper
+cor.test(cor.dat$predicted_score,cor.dat$label) # Loyalty score to return count
+cor.scorereturn <- cor.test(cor.dat$predicted_score,as.numeric(cor.dat$label_binary)) # Score to return (binary) - for paper
 cor.decilereturn <- cor.test(cor.dat$decile,as.numeric(cor.dat$label_binary)) # Decile to return (binary) - for paper
 cor.scorereturn
 cor.decilereturn
@@ -98,15 +106,15 @@ dbmart %>% group_by(phenx) %>% dplyr::summarise(ct = n()/nrow(dems)) %>% arrange
 
 # Compute SHAP-style importance of each variable with our data and current coefficients
 # Used in importance plot at the bottom
-factor.contrib <- dbmart %>% group_by(phenx) %>% dplyr::summarise(ct = n()/nrow(dems)) %>% arrange(ct) %>% inner_join(coeff,by=c("phenx"="FIELD_NAME")) %>% mutate(contrib=ct*COEFF) %>% arrange(contrib)
+factor.contrib <- dbmart %>% group_by(phenx) %>% dplyr::summarise(ct = n()/nrow(dems)) %>% arrange(ct) %>% inner_join(coeff,by=c("phenx"="field_name")) %>% mutate(contrib=ct*coeff) %>% arrange(contrib)
 ggplot(factor.contrib %>% arrange(contrib),aes(phenx,contrib)) + geom_point() + theme(axis.text.x = element_text(angle=90))
 
 #cor.dat %>% group_by(decile) %>% dplyr::summarise(sum(label_binary)) # count of TP (returned) by decile
 #dec1 <- cor.dat %>% filter(decile==10)
-#cor.test(dec1$Predicted_score,as.numeric(dec1$label_binary)) # Score to return count for only top decile
+#cor.test(dec1$predicted_score,as.numeric(dec1$label_binary)) # Score to return count for only top decile
 
 # ROC curve (uses package pROC)
-roc_binary <- cor.dat %>% roc("label_binary","Predicted_score",ci=TRUE, ci.alpha=0.9, stratified=FALSE,
+roc_binary <- cor.dat %>% roc("label_binary","predicted_score",ci=TRUE, ci.alpha=0.9, stratified=FALSE,
             # arguments for plot
             plot=TRUE, auc.polygon=TRUE, max.auc.polygon=TRUE, grid=TRUE,
             print.auc=TRUE, show.thres=TRUE)
@@ -123,42 +131,42 @@ youden.score
 
 # Test code plots all score vs labels
 #(p1 <- ggplot(cor.dat)+
-#    geom_point(aes(x=Predicted_score,y=label)))
+#    geom_point(aes(x=predicted_score,y=label)))
 
 # Charlson Index Correlations
-cor.test(cor.dat$Predicted_score,cor.dat$CHARLSON_10YR_SURVIVAL_PROB)
-cor.test(cor.dat$Predicted_score,cor.dat$CHARLSON_INDEX)
+cor.test(cor.dat$predicted_score,cor.dat$charlson_10yr_prob)
+cor.test(cor.dat$predicted_score,cor.dat$charlson_index)
 
-cor.decilecharlson <- cor.test(cor.dat$decile,cor.dat$CHARLSON_INDEX) # This is the one we're reporting - for paper
+cor.decilecharlson <- cor.test(cor.dat$decile,cor.dat$charlson_index) # This is the one we're reporting - for paper
 cor.decilecharlson
 
 # More test code that plots way too many points
 # (p <- ggplot(cor.dat)+
-#   geom_point(aes(x=Predicted_score,y=CHARLSON_INDEX)))
+#   geom_point(aes(x=predicted_score,y=charlson_index)))
 # (p <- ggplot(cor.dat)+
-#   geom_point(aes(x=Predicted_score,y=label)))
+#   geom_point(aes(x=predicted_score,y=label)))
 # (p <- ggplot(cor.dat)+
-#   geom_point(aes(x=Predicted_score,y=label_binary)))
+#   geom_point(aes(x=predicted_score,y=label_binary)))
 
 # Mean Charlson index to mean score, grouped by index, with std. deviatin of score
 # Not currently used
-charlson.compare.summary <- cor.dat %>% group_by(CHARLSON_INDEX) %>% dplyr::summarize(mean.score = mean(Predicted_score),mean.index=mean(CHARLSON_INDEX), sd.score = sd(Predicted_score),size.score=n())
+charlson.compare.summary <- cor.dat %>% group_by(charlson_index) %>% dplyr::summarize(mean.score = mean(predicted_score),mean.index=mean(charlson_index), sd.score = sd(predicted_score),size.score=n())
 
 # Plot of the above                                                          #ggplot(charlson.compare.summary,aes(y=mean.score,x=mean.index,size=size.score)) +  geom_point() + geom_smooth() + geom_line(aes(x=mean.index,y=mean.score+sd.score))
 
 # Decile of score vs charlson index, sized by group size - this goes in the paper
 # Similar pattern across all deciles of loyalty score. Highest loyalty contains the sickest but not all high loyalty are sick.
-charlson.compare.summary2 <- cor.dat %>% mutate(decile = ntile(Predicted_score,n=10)) %>% group_by(CHARLSON_INDEX,decile) %>% dplyr::summarize(ct=n())
+charlson.compare.summary2 <- cor.dat %>% mutate(decile = ntile(predicted_score,n=10)) %>% group_by(charlson_index,decile) %>% dplyr::summarize(ct=n())
 # Log scale dot size looks good, or /1000.
-ggplot(charlson.compare.summary2,aes(y=decile,x=CHARLSON_INDEX,size=log(ct))) + geom_point()
+charlson.compare.plot <- ggplot(charlson.compare.summary2,aes(y=decile,x=charlson_index,size=log(ct))) + geom_point()
 # 10-19-22 Let's save this one too
-ggsave(paste0(out_dir,currSiteId,"_charlsoncompare.png"),plot=imp.plot,width=4,height=3,units = "in")
+ggsave(paste0(out_dir,currSiteId,"_charlsoncompare.png"),plot=charlson.compare.plot,width=4,height=3,units = "in")
 
 # Alt plot that is not as good
-#ggplot(charlson.compare.summary2,aes(y=ct,x=CHARLSON_INDEX,color=decile)) + geom_line()
+#ggplot(charlson.compare.summary2,aes(y=ct,x=charlson_index,color=decile)) + geom_line()
 
 # Number of patients at each Charlson score - not currently used
-#cor.dat %>% filter(Predicted_score > mean(cor.dat$Predicted_score)) %>% group_by(CHARLSON_INDEX) %>% dplyr::summarize(size.group=n())
+#cor.dat %>% filter(predicted_score > mean(cor.dat$predicted_score)) %>% group_by(charlson_index) %>% dplyr::summarize(size.group=n())
 ```
 
 MLHO modeling below:
@@ -246,11 +254,11 @@ features.contrib <- factor.contrib %>% inner_join(features,c("phenx"="features")
 
 # jgk - 9/21/22 - compute coefficients, ORs, and probabilities - something doesn't seem right with the probabilities though so we use OR
 # Thank you for putting up with this messy chunk of code.
-out.importance <- coeff %>% mutate(OR_original=exp(COEFF),FIELD_NAME=tolower(FIELD_NAME)) %>% inner_join(model.coeff %>% mutate(features=tolower(features)),by=c("FIELD_NAME"="features")) %>% mutate(coeff_new=log(OR)) %>% mutate(prob=COEFF/(1+COEFF),prob_new=coeff_new/(1+coeff_new))
+out.importance <- coeff %>% mutate(OR_original=exp(coeff),field_name=tolower(field_name)) %>% inner_join(model.coeff %>% mutate(features=tolower(features)),by=c("field_name"="features")) %>% mutate(coeff_new=log(OR)) %>% mutate(prob=coeff/(1+coeff),prob_new=coeff_new/(1+coeff_new))
 out.importance$OR.new.scaled <- range01(out.importance$OR)*100
 out.importance$OR.original.scaled <- range01(out.importance$OR_original)*100
 feature.frequency <- dbmart %>% group_by(phenx) %>% dplyr::summarise(freq = n()/nrow(dems)) %>% arrange(freq) 
-out.importance <- out.importance %>% mutate(FIELD_NAME=tolower(FIELD_NAME)) %>% inner_join(feature.frequency %>% mutate(phenx=tolower(phenx)),by=c("FIELD_NAME"="phenx"))
+out.importance <- out.importance %>% mutate(field_name=tolower(field_name)) %>% inner_join(feature.frequency %>% mutate(phenx=tolower(phenx)),by=c("field_name"="phenx"))
 out.importance$ORfreq.new.scaled <- range01(out.importance$OR*out.importance$freq)*100
 out.importance$ORfreq.original.scaled <- range01(out.importance$OR_original*out.importance$freq)*100
 
@@ -258,21 +266,21 @@ out.importance$ORfreq.original.scaled <- range01(out.importance$OR_original*out.
 (imp.plot<- ggplot(out.importance) + 
     geom_segment(
       aes(y = min(sqrt(OR)),
-          x = reorder(FIELD_NAME,OR),
+          x = reorder(field_name,OR),
           yend = sqrt(OR),
-          xend = FIELD_NAME),
+          xend = field_name),
       size=0.5,alpha=0.5) +
     geom_point(
-      aes(x=reorder(FIELD_NAME,OR),y=sqrt(OR)),
+      aes(x=reorder(field_name,OR),y=sqrt(OR)),
       alpha=0.5,size=2,color="red") +
     geom_segment(
       aes(y = min(sqrt(OR)),
-          x = reorder(FIELD_NAME,OR_original),
+          x = reorder(field_name,OR_original),
           yend = sqrt(OR_original),
-          xend = FIELD_NAME),
+          xend = field_name),
       size=0.5,alpha=0.5) +
     geom_point(
-      aes(x=reorder(FIELD_NAME,OR_original),y=sqrt(OR_original)),
+      aes(x=reorder(field_name,OR_original),y=sqrt(OR_original)),
       alpha=0.5,size=2,color="blue") +
     geom_hline(yintercept = 1,lty=2) +
     theme_minimal()+
@@ -284,21 +292,21 @@ ggsave(paste0(out_dir,currSiteId,"_importanceglm_OR.png"),plot=imp.plot,width=4,
 # (imp.plot<- ggplot(out.importance) + 
 #     geom_segment(
 #       aes(y = 0,
-#           x = reorder(FIELD_NAME,OR.new.scaled),
+#           x = reorder(field_name,OR.new.scaled),
 #           yend = OR.new.scaled,
-#           xend = FIELD_NAME),
+#           xend = field_name),
 #       size=0.5,alpha=0.5) +
 #     geom_point(
-#       aes(x=reorder(FIELD_NAME,OR.new.scaled),y=OR.new.scaled),
+#       aes(x=reorder(field_name,OR.new.scaled),y=OR.new.scaled),
 #       alpha=0.5,size=2,color="red") +
 #     geom_segment(
 #       aes(y = 0,
-#           x = reorder(FIELD_NAME,OR.original.scaled),
+#           x = reorder(field_name,OR.original.scaled),
 #           yend = OR.original.scaled,
-#           xend = FIELD_NAME),
+#           xend = field_name),
 #       size=0.5,alpha=0.5) +
 #     geom_point(
-#       aes(x=reorder(FIELD_NAME,OR.original.scaled),y=OR.original.scaled),
+#       aes(x=reorder(field_name,OR.original.scaled),y=OR.original.scaled),
 #       alpha=0.5,size=2,color="blue") +
 #     theme_minimal()+
 #     coord_flip()+
@@ -309,21 +317,21 @@ ggsave(paste0(out_dir,currSiteId,"_importanceglm_OR.png"),plot=imp.plot,width=4,
 # (imp.plot<- ggplot(out.importance) + 
 #     geom_segment(
 #       aes(y = 0,
-#           x = reorder(FIELD_NAME,ORfreq.new.scaled),
+#           x = reorder(field_name,ORfreq.new.scaled),
 #           yend = ORfreq.new.scaled,
-#           xend = FIELD_NAME),
+#           xend = field_name),
 #       size=0.5,alpha=0.5) +
 #     geom_point(
-#       aes(x=reorder(FIELD_NAME,ORfreq.new.scaled),y=ORfreq.new.scaled),
+#       aes(x=reorder(field_name,ORfreq.new.scaled),y=ORfreq.new.scaled),
 #       alpha=0.5,size=2,color="red") +
 #     geom_segment(
 #       aes(y = 0,
-#           x = reorder(FIELD_NAME,ORfreq.original.scaled),
+#           x = reorder(field_name,ORfreq.original.scaled),
 #           yend = ORfreq.original.scaled,
-#           xend = FIELD_NAME),
+#           xend = field_name),
 #       size=0.5,alpha=0.5) +
 #     geom_point(
-#       aes(x=reorder(FIELD_NAME,ORfreq.original.scaled),y=ORfreq.original.scaled),
+#       aes(x=reorder(field_name,ORfreq.original.scaled),y=ORfreq.original.scaled),
 #       alpha=0.5,size=2,color="blue") +
 #     theme_minimal()+
 #     coord_flip()+

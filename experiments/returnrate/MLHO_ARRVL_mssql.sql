@@ -2,7 +2,7 @@
    Author: Darren Henderson with edits by Jeff Klann, PhD
  
  To use:
-   * Set site id in EXEC line below.
+   * Set site id in EXEC line below. (<SITE_EDIT.1>)
    * Add or modify the code marked "-- Note: You can add site-specific checks" to filter out visit_dimension entries that are not real visits
    * Sections beginning with a comment labeled "output" are optional statistics and are for checking or cross-site sharing.
    * Run the script and verify the views were created
@@ -29,6 +29,7 @@ DECLARE @cfilter udt_CohortFilter
 INSERT INTO @cfilter (PATIENT_NUM, COHORT_NAME, INDEX_DT)
 select patient_num, cohort, index_dt from #precohort where index_dt!=ephemeral_dt
 
+/* <SITE_EDIT.1> */
 EXEC [DBO].[USP_LOYALTYCOHORT_OPT] @SITE='XXX', @LOOKBACK_YEARS=5,  @DEMOGRAPHIC_FACTS=1, @GENDERED=1, @COHORT_FILTER=@CFILTER, @OUTPUT=0
 
 /* OUTPUT: share percentage data */
@@ -69,15 +70,30 @@ WHERE LD.COHORT_NAME = 'MLHO_ARRVL'
 , CTE_1Y AS (
 SELECT V.PATIENT_NUM
   , MIN(V.START_DATE) AS FIRST_VISIT_1Y
-  , DATEDIFF(DD,C.index_dt,MIN(V.START_DATE)) AS DELTA_FIRST_VISIT_1Y
+  , DATEDIFF(DD,C.INDEX_DT,MIN(V.START_DATE)) AS DELTA_FIRST_VISIT_1Y
   , COUNT(DISTINCT V.ENCOUNTER_NUM) AS CNTD_VISITS_1Y
 FROM COHORT C
   JOIN DBO.VISIT_DIMENSION V
     ON C.patient_num = V.PATIENT_NUM
-    AND V.START_DATE BETWEEN DATEADD(DD,1,C.index_dt) AND DATEADD(YY,1,C.INDEX_DT)
+    AND CONVERT(DATE,V.START_DATE) BETWEEN DATEADD(DD,1,C.INDEX_DT) AND DATEADD(YY,1,C.INDEX_DT)
+    -- Note: You can add site-specific checks
+    /* UKY EXAMPLE */
+    /*
+    AND V.ENCOUNTER_NUM IN (SELECT ENCOUNTER_NUM 
+                            FROM DBO.OBSERVATION_FACT 
+                            WHERE CONCEPT_CD LIKE 'ICD%'
+                            INTERSECT 
+                            SELECT ENCOUNTER_NUM 
+                            FROM DBO.OBSERVATION_FACT 
+                            WHERE CONCEPT_CD LIKE 'CPT4%'
+                              OR  CONCEPT_CD LIKE 'HCPCS%') -- ONLY CONSIDER VISITS THAT HAVE A DX AND PX FACT (FILTERS OUT LAB DRAW ENCOUNTERS)
+    */
+    /* MGB EXAMPLE */
+    /*
     -- JGK filter out false visits
-	and start_date!=end_date -- filter out instantaneous visits, which are usually lab results (jgk)
-	and sourcesystem_cd not like '%PB' -- jgk Professional billing, which is listed as a visit. This works because such stays have only one sourcesystem, from victor's analysis.
+	  AND START_DATE!=END_DATE -- FILTER OUT INSTANTANEOUS VISITS, WHICH ARE USUALLY LAB RESULTS (JGK)
+	  AND SOURCESYSTEM_CD NOT LIKE '%PB' -- jgk Professional billing, which is listed as a visit. This works because such stays have only one sourcesystem, from victor's analysis.
+    */
 GROUP BY V.PATIENT_NUM, C.INDEX_DT
 )
 SELECT C.*, C1.FIRST_VISIT_1Y, C1.DELTA_FIRST_VISIT_1Y, C1.CNTD_VISITS_1Y
@@ -167,12 +183,12 @@ UNPIVOT
 (VALUE FOR FEAT IN ([NUM_DX1], [NUM_DX2], [MED_USE1], [MED_USE2], [MAMMOGRAPHY], [PAP_TEST], [PSA_TEST], [COLONOSCOPY], [FECAL_OCCULT_TEST], [FLU_SHOT], [PNEUMOCOCCAL_VACCINE], [BMI], [A1C], [MEDICAL_EXAM], [INP1_OPT1_VISIT], [OPT2_VISIT], [ED_VISIT], [MDVISIT_PNAME2], [MDVISIT_PNAME3], [ROUTINE_CARE2]))U
 GO
 
-CREATE OR ALTER VIEW LOYALTY_MLHO_LABELDT_1Y_VW AS -- labeldt1y
+CREATE OR ALTER VIEW LOYALTY_MLHO_LABELDT_1Y_VW AS -- labeldt
 SELECT PATIENT_NUM, isnull(CNTD_VISITS_1Y,0) AS LABEL
 FROM DBO.LOYALTY_MLHO_ARRVL
 GO
 
-CREATE OR ALTER VIEW LOYALTY_MLHO_DEMOGRAPHIC_VW AS
+CREATE OR ALTER VIEW LOYALTY_MLHO_DEMOGRAPHIC_VW AS -- dems
 SELECT patient_num, age, sex as gender, [LOOKBACK_YEARS], [SITE], [cohort_name], [index_dt], [AGE_GRP]
   , [Predicted_score], [CHARLSON_INDEX], [CHARLSON_10YR_PROB], [MI], [CHF], [CVD], [PVD], [DEMENTIA], [COPD], [RHEUMDIS]
   , [PEPULCER], [MILDLIVDIS], [DIABETES_NOCC], [DIABETES_WTCC], [HEMIPARAPLEG], [RENALDIS], [CANCER], [MSVLIVDIS], [METASTATIC], [AIDSHIV]

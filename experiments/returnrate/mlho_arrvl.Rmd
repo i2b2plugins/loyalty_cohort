@@ -58,9 +58,9 @@ conn <- dbConnect(jdbcDriver, "jdbc:oracle:thin:@//database.hostname.com:port/se
 ##end of lines to modify to get your data
 
 # The views currently swap dbmart and labeldt. This swaps them back.
-labeldt <- dbGetQuery(conn,paste0("select * from [dbo].[LOYALTY_MLHO_dbmart1Y_vw]"))
-dems <- dbGetQuery(conn,paste0("select * from [dbo].[LOYALTY_MLHO_demographic_vw]"))
-dbmart <- dbGetQuery(conn,paste0("select * from [dbo].[LOYALTY_MLHO_labeldt_vw]"))
+labeldt <- dbGetQuery(conn,paste0("select * from [dbo].[LOYALTY_MLHO_LABELDT1Y_VW]"))
+dems <- dbGetQuery(conn,paste0("select * from [dbo].[LOYALTY_MLHO_DEMOGRAPHIC_VW]"))
+dbmart <- dbGetQuery(conn,paste0("select * from [dbo].[LOYALTY_MLHO_DBMART_VW]"))
 coeff <- dbGetQuery(conn,paste0("select * from [dbo].[XREF_LOYALTYCODE_PSCOEFF]"))
 
 # Switch column headers to lowercase

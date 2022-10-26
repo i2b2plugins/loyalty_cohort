@@ -15,6 +15,8 @@ TRUNCATE TABLE [dbo].[loyalty_dev_summary]
 DELETE FROM LOYALTY_DEV WHERE COHORT_NAME = 'MLHO_ARRVL'
 GO
 
+IF OBJECT_ID(N'tempdb..#PRECOHORT') IS NOT NULL DROP TABLE #PRECOHORT;
+
 /* jgk - added an ephemeral filter to the cohort selection step. is much faster for some reason. can be disabled in the loyalty script. */
 SELECT PATIENT_NUM, 'MLHO_ARRVL' AS COHORT, MAX(START_DATE) AS INDEX_DT, MIN(START_DATE) AS EPHEMERAL_DT/* INDEX_DT IS THEIR LAST VISIT IN THE CAPTURE PERIOD */
 INTO #PRECOHORT

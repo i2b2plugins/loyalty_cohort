@@ -15,7 +15,7 @@ TRUNCATE TABLE [dbo].[loyalty_dev_summary]
 DELETE FROM LOYALTY_DEV WHERE COHORT_NAME = 'MLHO_ARRVL'
 GO
 
-/* jgk - added an ephemeral filter to the cohort selection step. is much faster for some reason. can be disabled in the loyalty script. */
+/* jgk - ephemeral_dt can be optionally used to filter out patients with only one visit. */
 select patient_num, 'MLHO_ARRVL' AS cohort, max(start_date) as index_dt, min(start_date) as ephemeral_dt/* index_dt is their last visit in the capture period */
 into #precohort
 FROM VISIT_DIMENSION
@@ -26,7 +26,8 @@ GROUP BY PATIENT_NUM;
 DECLARE @cfilter udt_CohortFilter
 
 INSERT INTO @cfilter (PATIENT_NUM, COHORT_NAME, INDEX_DT)
-select patient_num, cohort, index_dt from #precohort where index_dt!=ephemeral_dt
+select patient_num, cohort, index_dt from #precohort 
+-- Add this clause to filter patients with only one visit: where index_dt!=ephemeral_dt
 
 
 EXEC [dbo].[USP_LOYALTYCOHORT_OPT] @site='XXX', @LOOKBACK_YEARS=5, @DEMOGRAPHIC_FACTS=1, @GENDERED=1, @COHORT_FILTER=@cfilter, @OUTPUT=0
@@ -78,9 +79,9 @@ FROM COHORT C
   JOIN DBO.VISIT_DIMENSION V
     ON C.patient_num = V.PATIENT_NUM
     AND V.START_DATE BETWEEN DATEADD(DD,1,C.index_dt) AND DATEADD(YY,1,C.INDEX_DT)
-    -- JGK filter out false visits
-	and start_date!=end_date -- filter out instantaneous visits, which are usually lab results (jgk)
-	and sourcesystem_cd not like '%PB' -- jgk Professional billing, which is listed as a visit. This works because such stays have only one sourcesystem, from victor's analysis.
+    -- Add site-specific clauses to remove visits that are not actual encounters. Examples included below.
+    --   and start_date!=end_date 
+    --   and sourcesystem_cd not like '%PB' 
 GROUP BY V.PATIENT_NUM, C.INDEX_DT
 )
 , CTE_6MO AS (

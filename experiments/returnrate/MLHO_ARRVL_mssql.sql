@@ -29,9 +29,9 @@ INSERT INTO @cfilter (PATIENT_NUM, COHORT_NAME, INDEX_DT)
 select patient_num, cohort, index_dt from #precohort where index_dt!=ephemeral_dt
 
 
-EXEC [dbo].[usp_LoyaltyCohort_opt] @site='XXX', @lookbackYears=5,  @demographic_facts=1, @gendered=1, @cohort_filter=@cfilter, @output=0
+EXEC [dbo].[USP_LOYALTYCOHORT_OPT] @site='XXX', @LOOKBACK_YEARS=5, @DEMOGRAPHIC_FACTS=1, @GENDERED=1, @COHORT_FILTER=@cfilter, @OUTPUT=0
 --EXEC [dbo].[usp_LoyaltyCohort_opt] @site='UKY', @lookbackYears=2, @demographic_facts=1, @gendered=2, @cohort_filter=@cfilter, @output=0
---EXEC [dbo].[usp_LoyaltyCohort_opt] @site='MGB', @lookbackYears=5, @demographic_facts=0, @gendered=1, @cohort_filter=@cfilter, @output=1
+--EXEC [dbo].[USP_LOYALTYCOHORT_OPT] @site='MGB', @LOOKBACK_YEARS=5, @DEMOGRAPHIC_FACTS=0, @GENDERED=1, @COHORT_FILTER=@cfilter, @OUTPUT=1
 
 /* OUTPUT: share percentage data */
 /* this query is the output that should be shared across sites */

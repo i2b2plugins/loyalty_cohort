@@ -160,7 +160,7 @@ charlson.compare.summary2 <- cor.dat %>% mutate(decile = ntile(predicted_score,n
 # Log scale dot size looks good, or /1000.
 charlson.compare.plot <- ggplot(charlson.compare.summary2,aes(y=decile,x=charlson_index,size=log(ct))) + geom_point()
 # 10-19-22 Let's save this one too
-ggsave(paste0(out_dir,currSiteId,"_charlsoncompare.png"),plot=charlson.compare.plot,width=4,height=3,units = "in")
+ggsave(paste0(out_dir,currSiteId,"_charlsoncompare.png"),plot=charlson.compare.plot,width=6.5,height=3,units = "in")
 
 # Alt plot that is not as good
 #ggplot(charlson.compare.summary2,aes(y=ct,x=charlson_index,color=decile)) + geom_line()

@@ -1,6 +1,8 @@
 ---
 title: "MLHO_arrvl"
-output: html_notebook
+output:
+  html_document:
+    df_print: paged
 ---
 
 This should be run for loyalty cohort analysis after running the loyalty score script AND the return rate script. This connects to your database and loads data via the views at the end of the return rate script.

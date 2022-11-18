@@ -17,7 +17,6 @@ GO
 
 IF OBJECT_ID(N'tempdb..#PRECOHORT') IS NOT NULL DROP TABLE #PRECOHORT;
 
-/* jgk - added an ephemeral filter to the cohort selection step. is much faster for some reason. can be disabled in the loyalty script. */
 SELECT PATIENT_NUM, 'MLHO_ARRVL' AS COHORT, MAX(START_DATE) AS INDEX_DT /* INDEX_DT IS THEIR LAST VISIT IN THE CAPTURE PERIOD */
 INTO #PRECOHORT
 FROM VISIT_DIMENSION
@@ -27,10 +26,13 @@ GROUP BY PATIENT_NUM;
 DECLARE @cfilter udt_CohortFilter
 
 INSERT INTO @cfilter (PATIENT_NUM, COHORT_NAME, INDEX_DT)
-select patient_num, cohort, index_dt from #precohort
+select patient_num, cohort, index_dt from #precohort 
+-- Add this clause to filter patients with only one visit: where index_dt!=ephemeral_dt
 
-/* <SITE_EDIT.1> */
-EXEC [DBO].[USP_LOYALTYCOHORT_OPT] @SITE='XXX', @LOOKBACK_YEARS=5,  @DEMOGRAPHIC_FACTS=1, @GENDERED=1, @COHORT_FILTER=@CFILTER, @OUTPUT=0
+-- Edit for your site
+EXEC [dbo].[USP_LOYALTYCOHORT_OPT] @site='XXX', @LOOKBACK_YEARS=5, @DEMOGRAPHIC_FACTS=1, @GENDERED=1, @COHORT_FILTER=@cfilter, @OUTPUT=0
+--EXEC [dbo].[usp_LoyaltyCohort_opt] @site='UKY', @lookbackYears=2, @demographic_facts=1, @gendered=2, @cohort_filter=@cfilter, @output=0
+--EXEC [dbo].[USP_LOYALTYCOHORT_OPT] @site='MGB', @LOOKBACK_YEARS=5, @DEMOGRAPHIC_FACTS=0, @GENDERED=1, @COHORT_FILTER=@cfilter, @OUTPUT=1
 
 /* OUTPUT: share percentage data */
 /* this query is the output that should be shared across sites */
@@ -195,5 +197,4 @@ SELECT PATIENT_NUM, AGE, SEX AS GENDER, [LOOKBACK_YEARS], [SITE], [COHORT_NAME],
   , [FIRST_VISIT_1Y], [DELTA_FIRST_VISIT_1Y], [CNTD_VISITS_1Y]
 FROM DBO.LOYALTY_MLHO_ARRVL
 GO
-
 

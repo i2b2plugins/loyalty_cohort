@@ -17,12 +17,12 @@ GO
 
 IF OBJECT_ID(N'tempdb..#PRECOHORT') IS NOT NULL DROP TABLE #PRECOHORT;
 
--- Currently selecting all patients with a visit 2015-2018 and set the index date to 12/31/2018
+-- Currently selecting all patients with a visit 2014-2018 and set the index date to 12/31/2018
 -- another option is to do the same but for a different number of years
 SELECT PATIENT_NUM, 'MLHO_ARRVL' AS COHORT, MAX(START_DATE) AS MAX_VISIT_DT /* MAX_VISIT_DT IS THEIR LAST VISIT IN THE CAPTURE PERIOD */
 INTO #PRECOHORT
 FROM VISIT_DIMENSION
-WHERE START_DATE >= CONVERT(DATETIME,'20150101') AND START_DATE < CONVERT(DATETIME,'20190101')
+WHERE START_DATE >= CONVERT(DATETIME,'20140101') AND START_DATE < CONVERT(DATETIME,'20190101')
 GROUP BY PATIENT_NUM;
 
 -- remove patients <19 at start of measure period or dead before the end of the follow-up period. (this is about 225k at MGB)

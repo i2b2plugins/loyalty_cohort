@@ -17,17 +17,26 @@ GO
 
 IF OBJECT_ID(N'tempdb..#PRECOHORT') IS NOT NULL DROP TABLE #PRECOHORT;
 
-SELECT PATIENT_NUM, 'MLHO_ARRVL' AS COHORT, MAX(START_DATE) AS INDEX_DT /* INDEX_DT IS THEIR LAST VISIT IN THE CAPTURE PERIOD */
+-- Currently selecting all patients with a visit 2015-2018 and set the index date to 12/31/2018
+-- another option is to do the same but for a different number of years
+SELECT PATIENT_NUM, 'MLHO_ARRVL' AS COHORT, MAX(START_DATE) AS MAX_VISIT_DT /* MAX_VISIT_DT IS THEIR LAST VISIT IN THE CAPTURE PERIOD */
 INTO #PRECOHORT
 FROM VISIT_DIMENSION
-WHERE START_DATE >= CONVERT(DATETIME,'20140101') AND START_DATE < CONVERT(DATETIME,'20190101')
+WHERE START_DATE >= CONVERT(DATETIME,'20150101') AND START_DATE < CONVERT(DATETIME,'20190101')
 GROUP BY PATIENT_NUM;
+
+-- remove patients <19 at start of measure period or dead before the end of the follow-up period. (this is about 225k at MGB)
+delete from #PRECOHORT where PATIENT_NUM in
+(select PATIENT_NUM from PATIENT_DIMENSION p where floor(datediff(DD,isnull(p.BIRTH_DATE,CONVERT(DATETIME,'20180101')),CONVERT(DATETIME,'20140101'))/365.25)<19 OR ISNULL(P.DEATH_DATE,'20990101')<=DATEADD(YEAR, 1, CONVERT(DATETIME,'20181231')))
+
 
 DECLARE @cfilter udt_CohortFilter
 
+-- Fixed index date of 12-31-2018
 INSERT INTO @cfilter (PATIENT_NUM, COHORT_NAME, INDEX_DT)
-select patient_num, cohort, index_dt from #precohort 
+select patient_num, cohort, CONVERT(DATETIME,'20181231') AS index_dt from #precohort 
 -- Add this clause to filter patients with only one visit: where index_dt!=ephemeral_dt
+
 
 -- Edit for your site
 EXEC [dbo].[USP_LOYALTYCOHORT_OPT] @site='XXX', @LOOKBACK_YEARS=5, @DEMOGRAPHIC_FACTS=1, @GENDERED=1, @COHORT_FILTER=@cfilter, @OUTPUT=0
@@ -91,10 +100,11 @@ FROM COHORT C
                               OR  CONCEPT_CD LIKE 'HCPCS%') -- ONLY CONSIDER VISITS THAT HAVE A DX AND PX FACT (FILTERS OUT LAB DRAW ENCOUNTERS)
     */
     /* MGB EXAMPLE */
-    /*
-    -- JGK filter out false visits
+	/*
+      -- JGK filter out false visits
 	  AND START_DATE!=END_DATE -- FILTER OUT INSTANTANEOUS VISITS, WHICH ARE USUALLY LAB RESULTS (JGK)
 	  AND SOURCESYSTEM_CD NOT LIKE '%PB' -- jgk Professional billing, which is listed as a visit. This works because such stays have only one sourcesystem, from victor's analysis.
+      AND SOURCESYSTEM_CD NOT LIKE 'Phenorm%' -- jgk computed phenotypes, which are not encounters - though this doesn't impact the present study
     */
 GROUP BY V.PATIENT_NUM, C.INDEX_DT
 )

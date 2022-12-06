@@ -129,8 +129,6 @@ plot.new()
 plot(roc_binary,print.auc=TRUE, auc.polygon=TRUE,max.auc.polygon=TRUE,type="shape")
 dev.off()
 
-youden.score
-
 # Test code plots all score vs labels
 #(p1 <- ggplot(cor.dat)+
 #    geom_point(aes(x=predicted_score,y=label)))
@@ -216,7 +214,9 @@ uniqpats.test <- c(as.character(unique(dat.test$patient_num)))
 dat.test <- MSMSR.lite(MLHO.dat=dat.test,patients = uniqpats.test,sparsity=NA,jmi = FALSE,labels = labeldt, multicore=FALSE)
 
 dems.save <- dems
-dems <- dplyr::select(dems,patient_num,age)
+# 12-6-22 Control for gender too
+dems <- dems %>% mutate(gender.int = ifelse(gender=='F',1,0))
+dems <- dplyr::select(dems,patient_num,age,gender.int)
 # dems$gender < ifelse(dems$gender == "F", 1,0)
 
 model.test <- mlearn(dat.train,
@@ -341,13 +341,18 @@ ggsave(paste0(out_dir,currSiteId,"_importanceglm_OR.png"),plot=imp.plot,width=4,
 # ggsave(paste0(out_dir,currSiteId,"_importanceglm_freqscaledOR.png"),plot=imp.plot,width=4,height=3,units = "in")
 
 
-# ROC curve (uses package pROC)
+# ROC curve (uses package pROC) and counts
 library(pROC)
 roc_mlho <- model.test$AE %>% roc("actual","Y",ci=TRUE, ci.alpha=0.9, stratified=FALSE,
             # arguments for plot
             plot=TRUE, auc.polygon=TRUE, max.auc.polygon=TRUE, grid=TRUE,
             print.auc=TRUE, show.thres=TRUE)
 youden.score_mlho <- coords(roc_binary, x="best", input="threshold", best.method="youden")
+youden.score
+cnt.all <- dems %>% nrow()
+cnt.youden <- cor.dat %>% filter(predicted_score>youden.score$threshold) %>% select(patient_num) %>% distinct_all() %>% nrow()
+cnt.true <- cor.dat %>% filter(label_binary==TRUE) %>% select(patient_num) %>% distinct_all() %>% nrow()
+cnt.youdenmlho <- cor.dat %>% filter(predicted_score>youden.score_mlho$threshold) %>% select(patient_num) %>% distinct_all() %>% nrow()
 #roc_binary.ci <- ci.se(roc_binary)
  
 # Alternative using plotROC...
@@ -381,7 +386,12 @@ results <- list(
   features.contrib = features.contrib,  # Importance in original vs. MLHO
   cor.decilecharlson = cor.decilecharlson, # Correlations...
   cor.scorereturn = cor.scorereturn,
-  cor.decilereturn = cor.decilereturn
+  cor.decilereturn = cor.decilereturn,
+  # Added 12-6-22
+  pct.truesize = cnt.true/cnt.all,
+  pct.youdensize = cnt.youden/cnt.all,
+  pct.youdenmlhosize = cnt.youdenmlho / cnt.all,
+  cnt.all = round(cnt.all,-2)
   
 )
 site_results <- paste0(currSiteId, "_mlhoresults")

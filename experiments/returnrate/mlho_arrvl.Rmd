@@ -256,7 +256,7 @@ features.contrib <- factor.contrib %>% inner_join(features,c("phenx"="features")
 
 # jgk - 9/21/22 - compute coefficients, ORs, and probabilities - something doesn't seem right with the probabilities though so we use OR
 # Thank you for putting up with this messy chunk of code.
-out.importance <- coeff %>% mutate(OR_original=exp(coeff),field_name=tolower(field_name)) %>% inner_join(model.coeff %>% mutate(features=tolower(features)),by=c("field_name"="features")) %>% mutate(coeff_new=log(OR)) %>% mutate(prob=coeff/(1+coeff),prob_new=coeff_new/(1+coeff_new))
+out.importance <- coeff %>% mutate(OR_original=exp(coeff),field_name=tolower(field_name)) %>% right_join(model.coeff %>% mutate(features=tolower(features)),by=c("field_name"="features")) %>% mutate(coeff_new=log(OR)) %>% mutate(prob=coeff/(1+coeff),prob_new=coeff_new/(1+coeff_new))
 out.importance$OR.new.scaled <- range01(out.importance$OR)*100
 out.importance$OR.original.scaled <- range01(out.importance$OR_original)*100
 feature.frequency <- dbmart %>% group_by(phenx) %>% dplyr::summarise(freq = n()/nrow(dems)) %>% arrange(freq) 

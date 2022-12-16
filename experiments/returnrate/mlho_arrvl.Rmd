@@ -372,6 +372,22 @@ plot.new()
 plot(roc_mlho, print.auc=TRUE, auc.polygon=TRUE,max.auc.polygon=TRUE,type="shape")
 dev.off()
 
+# Save the ROC curves overlaid on each other
+png(file=paste0(out_dir,currSiteId, "_rocall.png"))
+plot.new()
+plot(roc_binary, print.auc = FALSE, col = "blue",auc.polygon=FALSE, type="shape")
+plot(roc_mlho, print.auc = FALSE, col = "red", print.auc.y = .4, auc.polygon=FALSE, type="shape",add = TRUE) 
+text(0.25, 0.4, paste("AUC for original:", round(roc_binary$auc, 3)),col="blue")
+text(0.25, 0.3, paste("AUC for MLHO:", round(roc_mlho$auc, 3)),col="red")
+dev.off()
+png(file=paste0(out_dir,currSiteId, "_rocall_smooth.png"))
+plot.new()
+plot(roc_binary, print.auc = FALSE, col = "blue",auc.polygon=FALSE)
+plot(roc_mlho, print.auc = FALSE, col = "red", print.auc.y = .4, auc.polygon=FALSE,add = TRUE) 
+text(0.25, 0.4, paste("AUC for original:", round(roc_binary$auc, 3)),col="blue")
+text(0.25, 0.3, paste("AUC for MLHO:", round(roc_mlho$auc, 3)),col="red")
+dev.off()
+
 ```
 ```{r Save}
 results <- list(

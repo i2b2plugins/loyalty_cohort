@@ -5,6 +5,12 @@ output:
     df_print: paged
 ---
 
+NOTE: To rerun this 3/2023 using LASSO, you must reinstall MLHO!
+Changes 3/2023:
+* Output coefficient min/max, percent of population using mlho, and prevalences of flags
+* Use LASSO for MLHO analyses
+* TODO: %pop on all pts , graph of changing loyalty % over score
+
 This should be run for loyalty cohort analysis after running the loyalty score script AND the return rate script. This connects to your database and loads data via the views at the end of the return rate script.
 
 1) CHANGE YOUR DATABASE CONNECTION INFORMATION BELOW!
@@ -14,7 +20,9 @@ This should be run for loyalty cohort analysis after running the loyalty score s
 
 ```{r load}
 # make sure the packages are installed --> 
-#devtools::install_github("hestiri/mlho")
+#install.packages("devtools")
+# RUN THIS ONCE 3/2023
+devtools::install_github("hestiri/mlho")
 if(!require(pacman)) install.packages("pacman")
 
 # This clears the global environment! Don't run this line if you need to keep your other variables around!
@@ -41,7 +49,7 @@ out_dir <- './'
 
 # db connection for MSSQL - modify as needed
 drv <- JDBC("com.microsoft.sqlserver.jdbc.SQLServerDriver",
-            "~/R/sqljdbc4.jar",
+            "/Users/jeffklann/R/sqljdbc42.jar",
             identifier.quote="`")
 conn <- dbConnect(drv,
                   "jdbc:sqlserver://db.partners.org;databaseName=ACT","user","password")
@@ -180,8 +188,9 @@ labeldt$label <- ifelse(labeldt$label >=1,1,0)
 
 uniqpats <- c(as.character(unique(dbmart$patient_num)))
 #using a 70-30 ratio
+# CHANGED 3/23
 test_ind <- sample(uniqpats,
-                   round(.5*length(uniqpats)))
+                   round(.7*length(uniqpats)))
 
 test_labels <- subset(labeldt,labeldt$patient_num %in% c(test_ind))
 print("test set lables:")
@@ -219,12 +228,13 @@ dems <- dems %>% mutate(gender.int = ifelse(gender=='F',1,0))
 dems <- dplyr::select(dems,patient_num,age,gender.int)
 # dems$gender < ifelse(dems$gender == "F", 1,0)
 
+# CHANGED 3/23
 model.test <- mlearn(dat.train,
                      dat.test,
                      dems=dems,
                      save.model=TRUE,
-                     classifier="glm",
-                     note="mlho_arrival",
+                     classifier="regLogistic", # glm
+                     note="mlho_arrival_lasso",
                      cv="cv",
                      nfold=5,
                      aoi="1y_arrival",
@@ -232,17 +242,19 @@ model.test <- mlearn(dat.train,
 
 model.test$ROC # reporting AUC for paper
 
-# 9/21/22 -jgk - Run MLHO's secret code path to get regression coeffcients
-model.coeff <- mlearn(dat.train,
-                     NULL,
-                     dems=dems,
-                     save.model=FALSE,
-                     classifier="glm",
-                     note="mlho_arrival",
-                     cv="cv",
-                     nfold=5,
-                     aoi="1y_arrival",
-                     multicore=FALSE)
+# CHANGED 3/23- changed for lasso
+model.coeff <- model.test$features %>% mutate(OR=exp(coefficients))
+# # 9/21/22 -jgk - Run MLHO's secret code path to get regression coeffcients
+# model.coeff <- mlearn(dat.train,
+#                      NULL,
+#                      dems=dems,
+#                      save.model=FALSE,
+#                      classifier="glm",
+#                      note="mlho_arrival",
+#                      cv="cv",
+#                      nfold=5,
+#                      aoi="1y_arrival",
+#                      multicore=FALSE)
 
 ##from these loyalty features, we can build a model that has a AUROC of 0.81 on a held out test set
 # if it is smaller than 0.85, not that great
@@ -288,7 +300,8 @@ out.importance$ORfreq.original.scaled <- range01(out.importance$OR_original*out.
     theme_minimal()+
     coord_flip()+
     labs(y="Square root of Odds Ratio",x=""))
-ggsave(paste0(out_dir,currSiteId,"_importanceglm_OR.png"),plot=imp.plot,width=4,height=3,units = "in")
+# CHANGED 3/2023 FILE NAME
+ggsave(paste0(out_dir,currSiteId,"_importancelasso_OR.png"),plot=imp.plot,width=4,height=3,units = "in")
 # 
 # # jgk - 9/21/22 Scaled odds ratios
 # (imp.plot<- ggplot(out.importance) + 
@@ -349,10 +362,17 @@ roc_mlho <- model.test$AE %>% roc("actual","Y",ci=TRUE, ci.alpha=0.9, stratified
             print.auc=TRUE, show.thres=TRUE)
 youden.score_mlho <- coords(roc_binary, x="best", input="threshold", best.method="youden")
 youden.score
+# CHANGED 3/23 - This was an error, the actual scores change after retraining, so you have to recompute. Here we use the test set only.
 cnt.all <- dems %>% nrow()
 cnt.youden <- cor.dat %>% filter(predicted_score>youden.score$threshold) %>% select(patient_num) %>% distinct_all() %>% nrow()
 cnt.true <- cor.dat %>% filter(label_binary==TRUE) %>% select(patient_num) %>% distinct_all() %>% nrow()
-cnt.youdenmlho <- cor.dat %>% filter(predicted_score>youden.score_mlho$threshold) %>% select(patient_num) %>% distinct_all() %>% nrow()
+cnt.youdenmlho <- model.test$AE %>% filter(Y>mythreshold) %>% nrow() 
+cnt.testset <- model.test$AE %>% nrow()
+coeff.mlho.max <- sum((model.test$features %>% select(coefficients) %>% filter(coefficients>=0))$coefficients)
+coeff.mlho.min <- sum((model.test$features %>% select(coefficients) %>% filter(coefficients<=0))$coefficients)
+# Percent of patients with factor
+prevalences <- dbmart %>% group_by(phenx) %>% dplyr::summarise(ct = n()/nrow(dems)) %>% arrange(ct) 
+#cnt.youdenmlho <- cor.dat %>% filter(predicted_score>youden.score_mlho$threshold) %>% select(patient_num) %>% distinct_all() %>% nrow()
 #roc_binary.ci <- ci.se(roc_binary)
  
 # Alternative using plotROC...
@@ -406,9 +426,13 @@ results <- list(
   # Added 12-6-22
   pct.truesize = cnt.true/cnt.all,
   pct.youdensize = cnt.youden/cnt.all,
-  pct.youdenmlhosize = cnt.youdenmlho / cnt.all,
-  cnt.all = round(cnt.all,-2)
-  
+  #pct.youdenmlhosize = cnt.youdenmlho / cnt.all,
+  cnt.all = round(cnt.all,-2),
+  # Added 3/2023
+  pct.youdenmlhosize = cnt.youdenmlho / cnt.testset,
+  coeff.mlho.min = coeff.mlho.min,
+  coeff.mlho.max = coeff.mlho.max,
+  prevalences = prevalences
 )
 site_results <- paste0(currSiteId, "_mlhoresults")
 assign(site_results, results)

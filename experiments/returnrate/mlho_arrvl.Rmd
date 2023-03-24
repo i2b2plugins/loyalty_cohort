@@ -366,7 +366,7 @@ youden.score
 cnt.all <- dems %>% nrow()
 cnt.youden <- cor.dat %>% filter(predicted_score>youden.score$threshold) %>% select(patient_num) %>% distinct_all() %>% nrow()
 cnt.true <- cor.dat %>% filter(label_binary==TRUE) %>% select(patient_num) %>% distinct_all() %>% nrow()
-cnt.youdenmlho <- model.test$AE %>% filter(Y>mythreshold) %>% nrow() 
+cnt.youdenmlho <- model.test$AE %>% filter(Y>model.test$ROC$thresholdj) %>% nrow() 
 cnt.testset <- model.test$AE %>% nrow()
 coeff.mlho.max <- sum((model.test$features %>% select(coefficients) %>% filter(coefficients>=0))$coefficients)
 coeff.mlho.min <- sum((model.test$features %>% select(coefficients) %>% filter(coefficients<=0))$coefficients)

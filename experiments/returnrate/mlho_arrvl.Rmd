@@ -7,7 +7,6 @@ output:
 
 Changes 6/2023: The only change is to output a table of the demographic shift before and after loyalty.
 To do this (assuming you already made the other changes below when you ran it before) 
- * CHANGE mythreshold AROUND LINE 53
  * CHANGE THE QUERY TO LOAD RACE DATA AROUND LINE 90 IF NEEDED
  * RUN THROUGH LINE 350-ish TO REBUILD THE MLHO MODEL and generate the demographics table
 
@@ -47,11 +46,9 @@ pacman::p_load(data.table, devtools, backports, Hmisc, tidyr,dplyr,ggplot2,plyr,
                httr, DT, lubridate, latticeExtra,devtools,LiblineaR,RJDBC, scales, tidyverse,reshape2,foreach,doParallel,caret,gbm,lubridate,praznik,install=TRUE,update=FALSE)
 
 
-# NEW 6-23
-# Set an output directory, siteid, and threshold cutoff for filtering loyalty after mlearn
+# Set an output directory and siteid
 currSiteId <- 'MGB'
 out_dir <- './'
-mythreshold <- .613 # Change to your threshold from the paper: PITT - .321 or UKY- .532 or MGB - .613
 
 # Load the loyalty coefficients file - set to your own path
 # LOAD FROM DB
@@ -292,6 +289,9 @@ assign(site_results, results)
 
 ```{r Loyalty Dropout}
 # NEW 6-23! This will create your demographic differences table and write the output as a CSV to the output directory.
+# This gets the threshold from the model but you can also set it manually to match the paper:
+# Change to your threshold from the paper: PITT - .321 or UKY- .532 or MGB - .613
+mythreshold <- model.test$ROC$thresholdj
 pts.loyal <- (model.test$AE %>% filter(Y>mythreshold))$patient_num
 
 # Add race values loaded in the first chunk

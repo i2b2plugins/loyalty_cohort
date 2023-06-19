@@ -5,6 +5,12 @@ output:
     df_print: paged
 ---
 
+Changes 6/2023: The only change is to output a table of the demographic shift before and after loyalty.
+To do this (assuming you already made the other changes below when you ran it before) 
+ * CHANGE mythreshold AROUND LINE 53
+ * CHANGE THE QUERY TO LOAD RACE DATA AROUND LINE 90 IF NEEDED
+ * RUN THROUGH LINE 350-ish TO REBUILD THE MLHO MODEL and generate the demographics table
+
 NOTE: To rerun this 3/2023 using LASSO, you must reinstall MLHO!
 Changes 3/2023:
 * Output coefficient min/max, percent of population using mlho, and prevalences of flags
@@ -35,13 +41,17 @@ options(java.parameters = "-Xmx8048m")
 
 # Load all the additional packages. If this fails, just library() caret, tidyverse, and ggplot2 and add others as 
 # you run into errors.
+# New 6-23: Added scales. It's probably installed but you might have to install.packages("scales").
+# New 6-23: Also added a couple other libraries that mlho probably already installed earlier already.
 pacman::p_load(data.table, devtools, backports, Hmisc, tidyr,dplyr,ggplot2,plyr,scales,readr,
-               httr, DT, lubridate, tidyverse,reshape2,foreach,doParallel,caret,gbm,lubridate,praznik,install=TRUE,update=FALSE)
+               httr, DT, lubridate, latticeExtra,devtools,LiblineaR,RJDBC, scales, tidyverse,reshape2,foreach,doParallel,caret,gbm,lubridate,praznik,install=TRUE,update=FALSE)
 
 
-# Set an output directory and siteid
+# NEW 6-23
+# Set an output directory, siteid, and threshold cutoff for filtering loyalty after mlearn
 currSiteId <- 'MGB'
 out_dir <- './'
+mythreshold <- .613 # Change to your threshold from the paper: PITT - .321 or UKY- .532 or MGB - .613
 
 # Load the loyalty coefficients file - set to your own path
 # LOAD FROM DB
@@ -67,23 +77,33 @@ conn <- dbConnect(jdbcDriver, "jdbc:oracle:thin:@//database.hostname.com:port/se
 # labeldt <-   readr::read_csv(file.path(data_dir, "LOYALTY_MLHO_dbmart1Y.csv"))
 ##end of lines to modify to get your data
 
-# The views currently swap dbmart and labeldt. This swaps them back.
+# Load the the basic data needed for the study.
 labeldt <- dbGetQuery(conn,paste0("select * from [dbo].[LOYALTY_MLHO_LABELDT1Y_VW]"))
 dems <- dbGetQuery(conn,paste0("select * from [dbo].[LOYALTY_MLHO_DEMOGRAPHIC_VW]"))
 dbmart <- dbGetQuery(conn,paste0("select * from [dbo].[LOYALTY_MLHO_DBMART_VW]"))
 coeff <- dbGetQuery(conn,paste0("select * from [dbo].[XREF_LOYALTYCODE_PSCOEFF]"))
+
+# NEW 623: Get the ACT race name from the race code in the patient dimension
+# Note this only pulls patients with codes that map to ACT. We add 'other' to the others when building the demographics table.
+# Assumptions: 1) race is mapped from race_cd in the patient_dimension
+#              2) LOYALTY_MLHO_ARRVL has the valid list of patient_nums for the paper
+races <- dbGetQuery(conn,paste0("select c_name race,patient_num from ACT_DEM_V4 dem ",
+  "right join (select * from patient_dimension where patient_num in (select patient_num from dbo.LOYALTY_MLHO_ARRVL)) ", 
+  "ptdim on C_DIMCODE like '%'''+ptdim.race_cd+'''%' ",
+  "where c_fullname like '\\ACT\\Demographics\\Race\\%' and c_facttablecolumn='PATIENT_NUM' ")) 
 
 # Switch column headers to lowercase
 names(dems) <- tolower(names(dems))
 names(dbmart) <- tolower(names(dbmart))
 names(labeldt) <- tolower(names(labeldt))
 names(coeff) <- tolower(names(coeff))
+names(races) <- tolower(names(races))
 
 ```
 
 Analyze the current loyalty score and its relationship to return and Charlson index
 
-```{r}
+```{r stats}
 
 #jgk - Create decils - note that decile 1 is the lowest rank!
 dems <- dems %>% mutate(decile=ntile(predicted_score,10))
@@ -179,7 +199,7 @@ ggsave(paste0(out_dir,currSiteId,"_charlsoncompare.png"),plot=charlson.compare.p
 
 MLHO modeling below:
 
-```{r}
+```{r mlho}
 # Set up train/test data
 
 labeldt <- subset(labeldt,labeldt$patient_num %in% dems$patient_num)
@@ -257,7 +277,78 @@ model.coeff <- model.test$features %>% mutate(OR=exp(coefficients))
 #                      multicore=FALSE)
 
 ##from these loyalty features, we can build a model that has a AUROC of 0.81 on a held out test set
-# if it is smaller than 0.85, not that great
+# if it is smaller than 0.85, not that great 
+```
+
+```{r Save Model}
+# NEW 6-23! This is an optional step - you can save the model and demographics for safekeeping if you like - it is HUGE
+results <- list(
+  model.test, dems.save
+)
+site_results <- paste0(currSiteId, "_mlhoresults")
+assign(site_results, results)
+#save(list = site_results, file = file.path(out_dir, paste0(currSiteId, "_mlhoreturnresults_modelonly.rda")))
+```
+
+```{r Loyalty Dropout}
+# NEW 6-23! This will create your demographic differences table and write the output as a CSV to the output directory.
+pts.loyal <- (model.test$AE %>% filter(Y>mythreshold))$patient_num
+
+# Add race values loaded in the first chunk
+dems.all <- dems.save %>% left_join(races,by='patient_num') %>% mutate(race = replace(race,is.na(race),"Other"))
+
+# Make age group - thanks to this thread: https://community.rstudio.com/t/dplyr-way-s-and-base-r-way-s-of-creating-age-group-from-age/89226/2
+dems.all <- dems.all %>% 
+  mutate(
+    # Create categories
+    age_group = dplyr::case_when(
+      age <= 18            ~ "0-18",
+      age > 18 & age <= 34 ~ "18-34",
+      age > 34 & age <= 44 ~ "35-44",
+      age > 44 & age <= 54 ~ "45-54",
+      age > 54 & age <= 64 ~ "55-64",
+      age > 64 & age <= 84 ~ "63-84",
+            age > 84             ~ "> 84"
+    ),
+    # Convert to factor
+    age_group = factor(
+      age_group,
+      level = c("0-18", "18-34","35-44","45-54","55-64","63-84","> 84")
+    )
+  )
+
+# Code to generate summary table
+demo_summary_table <- function(dems.operate) {
+  
+  dems.total <- dems.operate %>% nrow() 
+  
+  dems.operate.gender <- dems.operate %>% group_by(gender) %>% dplyr::summarise(n = n()/dems.total) %>% mutate(Var='Gender', Cat=gender)
+  dems.operate.age <- dems.operate %>% group_by(age_group) %>% dplyr::summarise(n = n()/dems.total) %>% mutate(Var="Age Group", Cat=age_group) 
+    dems.operate.race <- dems.operate %>% group_by(race) %>% dplyr::summarise(n=n()/dems.total) %>% mutate(Var='Race',Cat=race)
+  dems.operate.charlsoni <- dems.operate %>% dplyr::summarise(n=mean(charlson_index)) %>% mutate(Var='Charlson Index',Cat='Mean')
+    dems.operate.charlson10 <- dems.operate %>% dplyr::summarise(n=mean(charlson_10yr_prob)) %>% mutate(Var='Charlson 10-year Survival Probablity',Cat='Mean')
+  #%>% pivot_wider(names_from='gender',values_from='n')
+  #pivot_wider(names_from='age_group',values_from='n')
+    
+  # Put the rows in a table
+  dems.table <- bind_rows(dems.operate.gender, dems.operate.age,dems.operate.race,dems.operate.charlsoni,dems.operate.charlson10)
+  
+  # Add a column for percentage, round off digits, and add site id
+  dems.table <- dems.table %>% left_join(dems.table %>% filter(Cat!='Mean') %>% mutate(pct=percent(n,accuracy=.1)) 
+                                         %>% select(Var,Cat,pct),by=c('Var','Cat')) %>% mutate(n=round(n,digits=4)) %>% mutate(Site=currSiteId)
+  
+  return(dems.table %>% select(Site,Var,Cat,n,pct))
+}
+
+dems.loyal <- dems.all %>% filter(patient_num %in% pts.loyal)
+dems.loyal.table <- demo_summary_table(dems.loyal)
+dems.all.table <- demo_summary_table(dems.all)
+dems.combined.table <- dems.loyal.table %>% left_join(dems.all.table,by=c('Var','Cat','Site')) %>% mutate(ndiff=round(n.x-n.y,digits=4),pctdiff=percent(n.x-n.y,accuracy=1)) %>% dplyr::rename(n.loyal=n.x,n.all=n.y,pct.loyal=pct.x,pct.all=pct.y)
+
+readr::write_csv(dems.combined.table,file.path(out_dir,paste0(currSiteId,'mlhoreturn_demodiff.csv')),col_names=TRUE,append = FALSE)
+```
+
+```{r analyses}
 
 features <- data.frame(model.test$features)
 

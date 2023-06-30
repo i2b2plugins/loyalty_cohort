@@ -1,0 +1,192 @@
+---
+title: "Retrain the loyalty cohort on local data"
+output: html_notebook
+---
+
+First, run the loyalty score script AND retrain_prep.sql to set up the data for retraining. This connects to your database and loads data via the views at the end of the return rate script, retrains using R (MLHO and LASSO) based on actual return to the site. The output is a new coefficients file, which also includes the old coefficients and the optimal threshold at the Youden point for both new and old coefficients.
+
+1) CHANGE YOUR DATABASE CONNECTION INFORMATION BELOW!
+2) SET OUTPUT DIR AND SITEID BELOW!
+
+Load the data from the database:
+
+```{r load}
+# make sure the packages are installed
+if(!require(pacman)) install.packages("pacman")
+pacman::p_load(data.table, devtools, backports, Hmisc, tidyr,dplyr,ggplot2,plyr,scales,readr, pROC,
+               httr, DT, lubridate, latticeExtra,devtools,LiblineaR,RJDBC, scales, tidyverse,reshape2,foreach,doParallel,caret,gbm,lubridate,praznik,
+               install=TRUE,update=FALSE)
+if (!require(mlho)) devtools::install_github("hestiri/mlho")
+options(java.parameters = "-Xmx8048m")
+
+# This clears the global environment! Don't run this line if you need to keep your other variables around!
+#rm(list=ls())
+
+# Set an output directory and siteid - MODIFY AS NEEDED
+currSiteId <- 'MGB'
+out_dir <- './'
+
+
+# db connection for MSSQL - MODIFY AS NEEDED
+drv <- JDBC("com.microsoft.sqlserver.jdbc.SQLServerDriver",
+            "/Users/jeffklann/R/sqljdbc42.jar",
+            identifier.quote="`")
+conn <- dbConnect(drv,
+                  "jdbc:sqlserver://db.partners.org;databaseName=ACT","user","password")
+# ** THIS IS FOR ORACLE
+drv <- JDBC(driverClass="oracle.jdbc.OracleDriver", classPath="lib/ojdbc6.jar")
+conn <- dbConnect(jdbcDriver, "jdbc:oracle:thin:@//database.hostname.com:port/service_name_or_sid", "username", "password")
+# ** AN EXAMPLE OF USING ODBC instead of JDBC
+#library(RODBC)
+# Sys.setenv(R_MAX_NUM_DLLS = 999)
+# conn <- odbcDriverConnect('driver={SQL Server};server=sv1-sqledt;database=I2B2ACT;trusted_connection=true')
+# ** AN EXAMPLE OF LOADING FROM CSV FILES
+# data_dir <- "~/Dropbox (Partners HealthCare)/HMS/Projects/ACT/loyalty_cohorts/mgb_returnmlho"
+# dbmart <-   readr::read_csv(file.path(data_dir, "LOYALTY_MLHO_labeldt.csv"))
+# dems <-   readr::read_csv(file.path(data_dir, "LOYALTY_MLHO_demographic.csv"))
+# labeldt <-   readr::read_csv(file.path(data_dir, "LOYALTY_MLHO_dbmart1Y.csv"))
+#coeff <- readr::read_csv("~/workspace/act_loyalty/LoyaltyCode_PSCoeff.csv")
+##end of lines to modify to get your data
+
+# Load the the basic data needed for the study.
+labeldt <- dbGetQuery(conn,paste0("select * from [dbo].[LOYALTY_MLHO_LABELDT1Y_VW]"))
+dems <- dbGetQuery(conn,paste0("select * from [dbo].[LOYALTY_MLHO_DEMOGRAPHIC_VW]"))
+dbmart <- dbGetQuery(conn,paste0("select * from [dbo].[LOYALTY_MLHO_DBMART_VW]"))
+coeff <- dbGetQuery(conn,paste0("select * from [dbo].[XREF_LOYALTYCODE_PSCOEFF]"))
+
+# Switch column headers to lowercase
+names(dems) <- tolower(names(dems))
+names(dbmart) <- tolower(names(dbmart))
+names(labeldt) <- tolower(names(labeldt))
+names(coeff) <- tolower(names(coeff))
+names(races) <- tolower(names(races))
+
+# Save a copy of the demographics in memory because it will be truncated for MLHO
+dems.save <- dems
+
+```
+
+Now collect a youden point and AUC for the unretrained loyalty score.
+
+```{r originalscore}
+# Correlation
+cor.dat <- merge(labeldt,dems.save,by="patient_num")
+uniqpats <- c(as.character(unique(dbmart$patient_num)))
+cor.dat <- cor.dat %>% mutate(label_binary=(label>0))
+cor.dat <- cor.dat %>% mutate(rrate = label/length(uniqpats))
+
+# ROC curve
+roc_binary <- cor.dat %>% roc("label_binary","predicted_score",ci=TRUE, ci.alpha=0.9, stratified=FALSE,
+            # arguments for plot
+            plot=TRUE, auc.polygon=TRUE, max.auc.polygon=TRUE, grid=TRUE,
+            print.auc=TRUE, show.thres=TRUE)
+youden.score <- coords(roc_binary, x="best", input="threshold", best.method="youden")
+print(paste0(c("AUC and Youden point of original score:",roc_binary$auc))) 
+table(youden.score)
+```
+
+
+MLHO modeling below:
+
+```{r mlho}
+# Set up train/test data, using a 70-30 ratio
+labeldt <- subset(labeldt,labeldt$patient_num %in% dems$patient_num)
+labeldt$label <- ifelse(labeldt$label >=1,1,0)
+uniqpats <- c(as.character(unique(dbmart$patient_num)))
+test_ind <- sample(uniqpats,
+                   round(.7*length(uniqpats)))
+test_labels <- subset(labeldt,labeldt$patient_num %in% c(test_ind))
+print("test set lables:")
+table(test_labels$label)
+train_labels <- subset(labeldt,!(labeldt$patient_num %in% c(test_ind)))
+print("train set lables:")
+table(train_labels$label)
+# train and test sets
+dat.train  <- subset(dbmart,!(dbmart$patient_num %in% c(test_ind)))
+dat.test <- subset(dbmart,dbmart$patient_num %in% c(test_ind))
+
+# Format train and test data
+data.table::setDT(dat.train)
+dat.train[,row := .I]
+dat.train$value.var <- 1
+uniqpats.train <- c(as.character(unique(dat.train$patient_num)))
+# MLHO requires MSMR.lite to run first for feature selection and data formatting
+# We don't do feature selection here
+dat.train <- MSMSR.lite(MLHO.dat=dat.train,
+                        patients = uniqpats.train,
+                        sparsity=0.005,
+                        labels = labeldt,
+                        topn=200, multicore=FALSE)
+dat.test <- subset(dat.test,dat.test$phenx %in% colnames(dat.train))
+setDT(dat.test)
+dat.test[,row := .I]
+dat.test$value.var <- 1
+uniqpats.test <- c(as.character(unique(dat.test$patient_num)))
+dat.test <- MSMSR.lite(MLHO.dat=dat.test,patients = uniqpats.test,sparsity=NA,jmi = FALSE,labels = labeldt, multicore=FALSE)
+
+# Control for age and gender. Remove these columns from the select if you do not wish to.
+dems <- dems %>% mutate(gender.int = ifelse(gender=='F',1,0))
+dems <- dplyr::select(dems,patient_num,age,gender.int)
+ 
+# Run LASSO
+model.test <- mlearn(dat.train,
+                     dat.test,
+                     dems=dems,
+                     save.model=TRUE,
+                     classifier="regLogistic", # glm
+                     note="mlho_arrival_lasso",
+                     cv="cv",
+                     nfold=5,
+                     aoi="1y_arrival",
+                     multicore=FALSE)
+
+print(paste0("Retrained ROC"))
+model.test$ROC
+model.coeff <- model.test$features %>% mutate(OR=exp(coefficients))
+
+```
+
+```{r Save Coefficients}
+# Compute the retrained score from the coefficients to get the youden threshold
+newscore <- dbmart %>% inner_join(model.test$features,by=c('phenx'='features')) %>% group_by(patient_num) %>% dplyr::summarise(score=sum(coefficients))
+
+newscore$scaledscore=rescale(newscore$score*-1) # Scaled score -- doesn't work for prediction!
+newscore$score2=newscore$score*-1
+
+scoriness <- newscore %>% inner_join(dems.save,by='patient_num') %>% select(patient_num,score2,predicted_score,scaledscore) %>% inner_join(model.test$AE, by='patient_num')
+
+myroc <- scoriness %>% roc("actual","score2",ci=TRUE, ci.alpha=0.9, stratified=FALSE,
+ # arguments for plot
+ plot=TRUE, auc.polygon=TRUE, max.auc.polygon=TRUE, grid=TRUE,
+ print.auc=TRUE, show.thres=TRUE)
+
+# Compute new youden threshold
+New.youden.score <- coords(myroc, x="best", input="threshold", best.method="youden")
+
+# Compute new coeff
+new.coeff <- model.test$features %>% filter(features %in% dbmart$phenx) %>% mutate(COEFF=coefficients*-1) %>% dplyr::rename(FIELD_NAME=features) %>% select(FIELD_NAME,COEFF)
+
+# Add old coeff to table
+new.coeff <- new.coeff %>% inner_join(coeff,by=c('FIELD_NAME'='field_name')) %>% dplyr::rename(ORIG_COEFF=coeff)
+
+# Add Youden threshold to table
+new.coeff %>% add_row(FIELD_NAME='youden',COEFF=New.youden.score$threshold, ORIG_COEFF=youden.score$threshold) 
+
+# Print some info 
+print(paste0("Make sure this AUC is almost the same as the model AUC above, or something is amiss: ",myroc$auc))
+table(New.youden.score)
+
+# Write to disk
+readr::write_csv(new.coeff,file.path(out_dir,paste0(currSiteId,'_newpscoeff.csv')))
+```
+
+```{r Save Model}
+# This is an optional step - you can save the model and demographics for safekeeping if you like - it is large
+results <- list(
+  model.test, dems.save
+)
+site_results <- paste0(currSiteId, "_mlhoresults")
+assign(site_results, results)
+save(list = site_results, file = file.path(out_dir, paste0(currSiteId, "_mlhoreturnresults_modelonly.rda")))
+```
+

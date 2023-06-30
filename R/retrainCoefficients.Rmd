@@ -171,7 +171,7 @@ new.coeff <- model.test$features %>% filter(features %in% dbmart$phenx) %>% muta
 new.coeff <- new.coeff %>% inner_join(coeff,by=c('FIELD_NAME'='field_name')) %>% dplyr::rename(ORIG_COEFF=coeff)
 
 # Add Youden threshold to table
-new.coeff %>% add_row(FIELD_NAME='youden',COEFF=New.youden.score$threshold, ORIG_COEFF=youden.score$threshold) 
+new.coeff <- new.coeff %>% add_row(FIELD_NAME='youden',COEFF=New.youden.score$threshold, ORIG_COEFF=youden.score$threshold) 
 
 # Print some info 
 print(paste0("Make sure this AUC is almost the same as the model AUC above, or something is amiss: ",myroc$auc))

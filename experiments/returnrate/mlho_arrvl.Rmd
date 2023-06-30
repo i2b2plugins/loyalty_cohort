@@ -277,6 +277,36 @@ model.coeff <- model.test$features %>% mutate(OR=exp(coefficients))
 # if it is smaller than 0.85, not that great 
 ```
 
+```{r Save Coefficients}
+# Compute the retrained score from the coefficients to get the youden threshold
+newscore <- dbmart %>% inner_join(model.test$features,by=c('phenx'='features')) %>% group_by(patient_num) %>% dplyr::summarise(score=sum(coefficients))
+
+newscore$scaledscore=rescale(newscore$score*-1) # Scaled score -- doesn't work for prediction!
+newscore$score2=newscore$score*-1
+
+scoriness <- newscore %>% inner_join(dems.save,by='patient_num') %>% select(patient_num,score2,predicted_score,scaledscore) %>% inner_join(model.test$AE, by='patient_num')
+
+myroc <- scoriness %>% roc("actual","score2",ci=TRUE, ci.alpha=0.9, stratified=FALSE,
+ # arguments for plot
+ plot=TRUE, auc.polygon=TRUE, max.auc.polygon=TRUE, grid=TRUE,
+ print.auc=TRUE, show.thres=TRUE)
+
+# Compute new youden threshold
+New.youden.score <- coords(myroc, x="best", input="threshold", best.method="youden")
+
+# Compute new coeff
+new.coeff <- model.test$features %>% filter(features %in% dbmart$phenx) %>% mutate(COEFF=coefficients*-1) %>% rename(FIELD_NAME=features) %>% select(FIELD_NAME,COEFF)
+
+# Add old coeff to table
+new.coeff <- new.coeff %>% inner_join(coeff,by=c('FIELD_NAME'='field_name')) %>% rename(ORIG_COEFF=coeff)
+
+# Add Youden threshold to table
+new.coeff %>% add_row(FIELD_NAME='youden',COEFF=New.youden.score$threshold, ORIG_COEFF=youden.score$threshold) 
+
+readr::write_csv(new.coeff,file.path(out_dir,paste0(currSiteId,'_newpscoeff.csv')))
+print(New.youden.score)
+```
+
 ```{r Save Model}
 # NEW 6-23! This is an optional step - you can save the model and demographics for safekeeping if you like - it is HUGE
 results <- list(

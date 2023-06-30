@@ -2,6 +2,7 @@
 title: "Retrain the loyalty cohort on local data"
 output: html_notebook
 ---
+Retrain the loyalty cohort on local data using MLHO (Machine Learns Health Outcomes). This script was written by Jeff Klann, PhD and Hossein Estiri, PhD
 
 First, run the loyalty score script AND retrain_prep.sql to set up the data for retraining. This connects to your database and loads data via the views at the end of the return rate script, retrains using R (MLHO and LASSO) based on actual return to the site. The output is a new coefficients file, which also includes the old coefficients and the optimal threshold at the Youden point for both new and old coefficients.
 

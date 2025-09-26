@@ -3,6 +3,7 @@
 
 #### See [appendix table S1](https://www.dovepress.com/get_supplementary_file.php?f=232540.docx) for the regression equation used to calculate the score.
 #### See [algorithm outline](https://github.com/i2b2plugins/loyalty_cohort/blob/main/ALGORITHM_README.md) for more details on the algorithm.
+#### This version is unsupported! The current release is [here](https://github.com/i2b2/i2b2-digitaltwin) with [this documentation](https://community.i2b2.org/wiki/display/BUN/Digital+Twin+Technologies)
 
 ## Notes:
 * Relies on i2b2 data using the ACT ontology.
